@@ -8,8 +8,8 @@ This is the editable submission entry point. Replace `implementation` with a
 added as needed.
 -/
 
-/-- Replace this empty policy with the submitted implementation. -/
+/-- Intentionally invalid proof: the verifier must reject this integration test. -/
 def implementation : TableGeneration.GeneratorPolicy :=
-  .empty
+  by sorry
 
 end TableGeneration.Submission.Policy
