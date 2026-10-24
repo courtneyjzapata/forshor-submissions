@@ -1,4 +1,5 @@
-import TableGeneration.Policy
+-- Private QP-396 pipeline integration test b.
+import TableGeneration.Policies.Accepted.P546fea33a7a4
 
 namespace TableGeneration.Submission.Policy
 
@@ -8,8 +9,8 @@ This is the editable submission entry point. Replace `implementation` with a
 added as needed.
 -/
 
-/-- Replace this empty policy with the submitted implementation. -/
+/-- Known-valid existing k=4 table, reused solely to test the private pipeline. -/
 def implementation : TableGeneration.GeneratorPolicy :=
-  .empty
+  TableGeneration.Policies.Accepted.P546fea33a7a4.implementation
 
 end TableGeneration.Submission.Policy
