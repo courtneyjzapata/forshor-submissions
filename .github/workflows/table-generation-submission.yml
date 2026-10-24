@@ -149,6 +149,13 @@ jobs:
       # preflight step above has already rejected any diff outside
       # `TableGeneration/Submission/Policy{,/**}`, so the `lakefile.lean` and
       # `lean-toolchain` that `lake env` reads here are the base branch's.
+      - name: Build the trusted parser imports on a cold runner
+        # Preflight has established these protected modules equal the trusted
+        # base. No submitted Policy/helper is compiled here. A new private repo
+        # cannot assume the upstream repository's build cache exists.
+        working-directory: submission
+        run: lake build TableGeneration.Policy TableGeneration.Baseline TableGeneration.Metrics TableGeneration.Spec
+
       - name: Check the submission syntax gate
         working-directory: submission
         run: python3 ../verifier/scripts/test_submission_syntax_gate.py
