@@ -1,0 +1,33 @@
+name: Refresh estimator environment cache
+on:
+  push:
+    branches: [main]
+    paths:
+      - evaluation/requirements.lock
+      - .github/actions/estimator-environment/action.yml
+      - .github/workflows/estimator-build-cache.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: estimator-build-cache-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - id: environment
+        uses: ./.github/actions/estimator-environment
+      - name: Verify the environment reproduces the website model
+        run: python -m unittest discover -s evaluation -p 'test_*.py'
+      - name: Save the trusted environment
+        if: steps.environment.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .venv
+          key: ${{ steps.environment.outputs.cache-key }}

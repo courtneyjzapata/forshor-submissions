@@ -1,5 +1,7 @@
 # Private ForShor submission pipeline
 
+The trusted main-only cache workflows prepare compiled Lean dependencies and a complete pinned Python environment. Publication restores the Python environment read-only and installs packages only on an exact cache miss. The environment key includes OS/architecture, Python patch version, and the dependency lock digest; the Python jobs use Ubuntu 24.04. Submission code cannot write either trusted cache.
+
 This is Zapata’s private sprint copy of `VerifiedQC/ShorTableOptimization`, pinned initially to `5a70873b25b1f54a3043d3153caad7ded350abc1`. The upstream verifier contract, Lean statements, benchmark targets, and scientific estimator equations are preserved.
 
 For this copy, submission PRs target **main**. Change only `TableGeneration/Submission/Policy.lean` and optional Lean helper files under `TableGeneration/Submission/Policy/`. The template intentionally handles no targets. A known-valid existing implementation is used for the first end-to-end test; no new research is required.

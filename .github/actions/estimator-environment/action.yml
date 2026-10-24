@@ -1,0 +1,36 @@
+name: Pinned estimator environment
+description: Restore a trusted Python environment; install only on an exact cache miss.
+outputs:
+  cache-hit:
+    description: Whether the exact pinned environment was restored.
+    value: ${{ steps.cache.outputs.cache-hit }}
+  cache-key:
+    description: Exact cache key for the trusted main-only writer.
+    value: ${{ steps.cache.outputs.cache-primary-key }}
+runs:
+  using: composite
+  steps:
+    - id: python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: '3.12'
+    - id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .venv
+        key: forshor-python-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ steps.python.outputs.python-version }}-${{ hashFiles('evaluation/requirements.lock') }}
+    - name: Install on cache miss
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        python -m venv .venv
+        .venv/bin/python -m pip install -r evaluation/requirements.lock
+    - name: Activate the pinned environment
+      shell: bash
+      run: |
+        echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+        .venv/bin/python - <<'PY' >> "$GITHUB_ENV"
+        import importlib.util
+        from pathlib import Path
+        print('ONECLICK_QUALTRAN=' + str(Path(importlib.util.find_spec('qualtran').origin).parent.parent))
+        PY
