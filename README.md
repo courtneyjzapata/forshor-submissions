@@ -17,6 +17,65 @@ Estimator upstream: `courtneyjzapata/forshor-resource-estimation@fe58769bbd4ec6d
 Website: https://github.com/zapatacomputing/forshor-site
 Ticket: https://linear.app/zapata-quantum/issue/QP-393
 
+## Reliable private staging pipeline (QP-396)
+
+The private sprint allows **one active verification job and one active
+publication job**, which can overlap. Each stage uses GitHub's `queue: max`
+concurrency queue (up to 100 waiting jobs per stage). Waiting does not hold a
+runner. The separate PR concurrency group cancels superseded verification
+runs; it never cancels a different PR's accepted publication. These conservative
+limits are the staging configuration, not the earlier theoretical 20-runner
+compute ceiling. Other organization workflows still share GitHub's overall cap.
+
+An accepted verification gets a trusted receipt on `submission-results` at
+`results/evaluations/<key>.json`. The key includes the submitted commit and
+the trusted verifier/Lean contract, dependency and scoring inputs. An identical
+submission checks this receipt before installing Lean or compiling. It reuses
+the accepted verification without trusting an artifact-selected identity.
+Scientific configuration changes invalidate reuse; infrastructure-only changes
+do not. Receipt/source identities are cross-checked against the accepted index.
+
+Publication has its own key, which also includes the estimator program and
+dependency lock. Google records completed keys in private state **in the same
+atomic pointer update as the results**. A duplicate or a retry after a lost
+acknowledgement is a no-op, without resource estimation, history changes or
+another website write. Failed/rejected submissions leave the last complete
+snapshot visible. GitHub job summaries distinguish rejection, supersession,
+verification reuse, successful publication and an already-published result.
+
+Archive writes rebuild the index from the exact current parent on every
+non-fast-forward retry. Publication conflicts refresh both Google's state and
+the accepted archive, then recalculate one consistent snapshot. Transient
+transport/storage failures retry up to four times with bounded backoff. The
+planner/Qualtran equations and Jai's frontend are unchanged.
+
+### Recover a failed publication
+
+Open the failed **Publish Verified Results** run and choose **Re-run failed
+jobs**, or run `gh run rerun PUBLISH_RUN_ID --repo zapatacomputing/forshor-submissions --failed`.
+This reruns only trusted publication; do not rerun **Verify Table Generation**.
+The source run and original attempt are fixed, and artifacts are named by both.
+Recovery also works after the submission PR closes, provided its head is still
+the verified commit and the branch still identifies the PR. A PR that has moved
+to a newer head is superseded and skipped. GitHub API outages/rate limits fail
+visibly rather than being mistaken for missing cache entries.
+
+Verifier artifacts are retained for 90 days; publication diagnostics for 14.
+Do not delete needed artifacts before recovery. If a stage's 100-job waiting
+queue fills, GitHub cancels additional arrivals visibly: rerun those runs after
+capacity is available. This is a bounded sprint queue, not an unlimited intake
+service. Retry exhaustion is a failed job with recovery instructions, never a
+successful workflow that silently lost a result.
+
+Local checks:
+
+```sh
+node scripts/test_report_trust.js
+node --test scripts/test_publication.js
+python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+python -m unittest discover -s evaluation -p 'test_*.py' # pinned Qualtran environment
+```
+
 The original upstream README follows. Its public-repository branch/promotion instructions are background; this private pipeline uses main and publishes to private staging only.
 
 ---

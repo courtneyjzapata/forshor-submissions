@@ -6,9 +6,14 @@ on:
 permissions: {}
 jobs:
   publish:
-    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # One publisher at a time; do not drop intermediate accepted submissions.
+    concurrency:
+      group: forshor-publication
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
       actions: read
@@ -16,6 +21,7 @@ jobs:
       id-token: write
     env:
       SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
       PUBLISHER_URL: ${{ vars.PUBLISHER_URL }}
     steps:
       - name: Checkout trusted publisher code
@@ -23,54 +29,34 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - name: Test archive trust boundaries
-        run: node scripts/test_report_trust.js
+      - name: Test archive and recovery trust boundaries
+        run: |
+          node scripts/test_report_trust.js
+          node --test scripts/test_publication.js
+          python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+      - name: Inspect the exact source attempt
+        id: source
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            await require('./scripts/ci/publication.js').inspect({ github, context, core });
       - name: Download verifier output as data
+        if: steps.source.outputs.process == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: table-generation-submission-${{ github.event.workflow_run.id }}
+          name: ${{ steps.source.outputs.artifact }}
           path: artifacts
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.event.workflow_run.id }}
-      - name: Validate PR identity and archive accepted results
+      - name: Archive once and prepare publication identity
+        if: steps.source.outputs.process == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
-            const fs = require('fs');
-            const reporting = require('./scripts/ci/table_generation_report.js');
-            const run = context.payload.workflow_run;
-            if (run.path !== '.github/workflows/table-generation-submission.yml') throw new Error('Unexpected verifier workflow');
-            const identity = await reporting.resolveTrustedPullRequest(github, context, run);
-            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: identity.number });
-            await reporting.persistBenchmarkResults({ github, context, core });
-            fs.writeFileSync('evaluation-metadata.json', JSON.stringify({
-              repository: `${context.repo.owner}/${context.repo.repo}`,
-              headSha: identity.headSha, runId: String(run.id), githubLogin: pr.user.login,
-              pullRequestUrl: pr.html_url, submittedAt: pr.created_at,
-              evaluatedAt: new Date().toISOString()
-            }));
-      - name: Checkout accepted archive only
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: submission-results
-          path: archive
-          persist-credentials: false
-      - name: Record immutable archive revision
-        run: |
-          python3 - <<'PY'
-          import json, subprocess
-          from pathlib import Path
-          p = Path('evaluation-metadata.json')
-          data = json.loads(p.read_text())
-          data['archiveCommit'] = subprocess.check_output(['git', '-C', 'archive', 'rev-parse', 'HEAD'], text=True).strip()
-          p.write_text(json.dumps(data))
-          PY
-      - name: Restore the pinned estimator environment
-        uses: ./.github/actions/estimator-environment
-      - name: Check every original resource estimate against the pinned baseline
-        run: python -m unittest discover -s evaluation -p 'test_*.py'
+            await require('./scripts/ci/publication.js').archive({ github, context, core });
       - name: Obtain short-lived publisher identity
+        if: steps.source.outputs.process == 'true'
         id: google
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
@@ -80,16 +66,44 @@ jobs:
           id_token_audience: ${{ vars.PUBLISHER_URL }}
           id_token_include_email: true
           create_credentials_file: false
-      - name: Read the current private publication
+      - name: Check whether this evaluation is already published
+        if: steps.source.outputs.process == 'true'
+        id: completed
         env:
           PUBLISHER_TOKEN: ${{ steps.google.outputs.id_token }}
-        run: curl --fail-with-body --silent --show-error -H "Authorization:Bearer $PUBLISHER_TOKEN" "$PUBLISHER_URL/state" --output current-state.json
-      - name: Evaluate the accepted catalog using the existing website model
-        run: python evaluation/estimate.py --archive archive --state current-state.json --metadata evaluation-metadata.json --out publish-input.json
-      - name: Publish a consistent versioned snapshot on Google
+        run: python3 evaluation/publish.py --check
+      - name: Checkout accepted archive only
+        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: submission-results
+          path: archive
+          persist-credentials: false
+      - name: Restore the pinned estimator environment
+        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true'
+        uses: ./.github/actions/estimator-environment
+      - name: Check every original resource estimate against the pinned baseline
+        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true'
+        run: python -m unittest discover -s evaluation -p 'test_*.py'
+      - name: Estimate and publish with conflict and transport recovery
+        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true'
         env:
           PUBLISHER_TOKEN: ${{ steps.google.outputs.id_token }}
+          GH_TOKEN: ${{ github.token }}
+        run: python evaluation/publish.py
+      - name: Explain recovery after a failure
+        if: failure()
         run: |
-          curl --fail-with-body --silent --show-error \
-            -H "Authorization:Bearer $PUBLISHER_TOKEN" -H 'Content-Type:application/json' \
-            --data-binary @publish-input.json "$PUBLISHER_URL/publish"
+          echo '::error::Publication failed. The last complete snapshot remains visible. Rerun this Publish Verified Results workflow to reuse verification; do not rerun Lean.'
+          echo '## Recovery' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Rerun this publication workflow (or its failed job). The source run and attempt stay fixed, accepted verification is reused, and an already completed publication becomes a no-op.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain publication diagnostics without credentials
+        if: always() && steps.source.outputs.process == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            publication-source.json
+            evaluation-metadata.json
+            publication-result.json
+          retention-days: 14

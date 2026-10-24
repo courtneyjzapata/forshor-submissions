@@ -34,10 +34,19 @@ async function resolveTrustedPullRequest(github, context, workflowRun) {
     throw new Error('The verification run does not identify a head commit.');
   }
   const { owner, repo } = context.repo;
-  const associated = await github.paginate(
+  let associated = await github.paginate(
     github.rest.repos.listPullRequestsAssociatedWithCommit,
     { owner, repo, commit_sha: headSha }
   );
+  // GitHub omits closed, unmerged PRs from the commit association endpoint.
+  // Recover through the API's branch filter, never an artifact-supplied PR ID.
+  if (!associated.length && workflowRun.head_branch && workflowRun.head_repository?.owner?.login) {
+    associated = await github.paginate(github.rest.pulls.list, {
+      owner, repo, state: 'all', base: SUBMISSION_BASE_REF,
+      head: `${workflowRun.head_repository.owner.login}:${workflowRun.head_branch}`,
+      per_page: 100,
+    });
+  }
   const candidates = associated.filter(
     (pr) =>
       pr.base &&
@@ -45,10 +54,13 @@ async function resolveTrustedPullRequest(github, context, workflowRun) {
       String(pr.head && pr.head.sha).toLowerCase() === headSha
   );
   if (candidates.length !== 1) {
-    throw new Error(
+    const error = new Error(
       `Expected exactly one ${SUBMISSION_BASE_REF} pull request at ${headSha}; ` +
         `found ${candidates.length}. Refusing to archive.`
     );
+    if (candidates.length === 0 && associated.some(pr => pr.base?.ref === SUBMISSION_BASE_REF
+        && pr.head?.sha && String(pr.head.sha).toLowerCase() !== headSha)) error.code = 'SUPERSEDED';
+    throw error;
   }
   const pr = candidates[0];
   const files = await github.paginate(github.rest.pulls.listFiles, {
@@ -100,6 +112,13 @@ function sourceRunId() {
 }
 
 async function sourceWorkflowRun(github, context) {
+  const attempt = Number(process.env.SOURCE_RUN_ATTEMPT || 0);
+  if (attempt) {
+    const response = await github.rest.actions.getWorkflowRunAttempt({
+      ...context.repo, run_id: sourceRunId(), attempt_number: attempt,
+    });
+    return response.data;
+  }
   const response = await github.rest.actions.getWorkflowRun({
     ...context.repo,
     run_id: sourceRunId(),
@@ -149,7 +168,7 @@ async function ensureResultsBranch(github, context) {
 
 const PERSIST_ATTEMPTS = 5;
 
-async function persistFiles(github, context, files, message) {
+async function persistFiles(github, context, files, message, rebuild = null) {
   const { owner, repo } = context.repo;
 
   // Blobs are content-addressed and say nothing about the branch head, so they
@@ -183,11 +202,18 @@ async function persistFiles(github, context, files, message) {
       commit_sha: headSha,
     });
 
+    const dynamicEntries = [];
+    for (const [storedPath, localPath] of rebuild ? await rebuild(headSha) : []) {
+      const blob = await github.rest.git.createBlob({ owner, repo,
+        content: fs.readFileSync(localPath).toString('base64'), encoding: 'base64' });
+      dynamicEntries.push({ path: storedPath, mode: '100644', type: 'blob', sha: blob.data.sha });
+    }
+
     const tree = await github.rest.git.createTree({
       owner,
       repo,
       base_tree: head.data.tree.sha,
-      tree: entries,
+      tree: [...entries, ...dynamicEntries],
     });
     if (tree.data.sha === head.data.tree.sha) return;
 
@@ -213,14 +239,14 @@ async function persistFiles(github, context, files, message) {
   }
 }
 
-async function downloadExistingIndex(github, context) {
+async function downloadExistingIndex(github, context, ref = RESULTS_BRANCH) {
   const { owner, repo } = context.repo;
   try {
     const existing = await github.rest.repos.getContent({
       owner,
       repo,
       path: 'leaderboard/results.json',
-      ref: RESULTS_BRANCH,
+      ref,
     });
     if (Array.isArray(existing.data) || existing.data.encoding !== 'base64') {
       throw new Error('Existing benchmark index is not a base64-encoded file.');
@@ -286,8 +312,12 @@ async function persistBenchmarkResults({ github, context, core }) {
   const storedIndexPath = 'leaderboard/results.json';
   const message = `chore(results): persist policy ${policyId.slice(0, 12)}`;
 
-  const existingIndexPath = await downloadExistingIndex(github, context);
-  buildBenchmarkIndex(existingIndexPath);
+  // Materialize this policy's operations before uploading the fixed files.
+  // The global index is separately rebuilt from each compare-and-swap parent.
+  buildBenchmarkIndex('');
+  const extraFiles = fs.existsSync('artifacts/verification-receipt.json')
+    ? [[`results/evaluations/${JSON.parse(fs.readFileSync('artifacts/verification-receipt.json', 'utf8')).key}.json`,
+      'artifacts/verification-receipt.json']] : [];
   await persistFiles(
     github,
     context,
@@ -296,9 +326,16 @@ async function persistBenchmarkResults({ github, context, core }) {
       [storedReportPath, reportPath],
       [storedSourcePath, sourcePath],
       [storedOperationsPath, operationsPath],
-      [storedIndexPath, 'artifacts/benchmark-results.json'],
+      ...extraFiles,
     ],
-    message
+    message,
+    async (headSha) => {
+      // Rebuild from the exact parent on EVERY attempt. Reusing an index built
+      // before a competing update silently removes the other accepted policy.
+      const existingIndexPath = await downloadExistingIndex(github, context, headSha);
+      buildBenchmarkIndex(existingIndexPath);
+      return [[storedIndexPath, 'artifacts/benchmark-results.json']];
+    }
   );
 
   core.setOutput('results_json_url', repositoryFileUrl(context, storedResultPath));
@@ -455,6 +492,8 @@ async function reportPullRequestResult({ github, context, core }) {
 }
 
 module.exports = {
+  persistFiles,
+  downloadExistingIndex,
   persistBenchmarkResults,
   reportPullRequestResult,
   resolveTrustedPullRequest,

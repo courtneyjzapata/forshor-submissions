@@ -19,6 +19,12 @@ jobs:
     name: Verifier
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Private sprint: one active verifier; retain up to 100 waiting runs.
+    # The workflow-level PR group still cancels superseded commits.
+    concurrency:
+      group: forshor-verification
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
 
@@ -72,7 +78,16 @@ jobs:
         run: |
           python3 ../verifier/scripts/verifier.py --out-dir artifacts --preflight-only
 
+      - name: Reuse an identical accepted verification
+        id: reuse
+        working-directory: verifier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUBMISSION_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/ci/verification_identity.py --head "$SUBMISSION_HEAD" --reuse ../submission/artifacts >> "$GITHUB_OUTPUT"
+
       - name: Install Lean
+        if: steps.reuse.outputs.reused != 'true'
         # From the trusted `verifier` checkout, never the fork's tree.
         working-directory: verifier
         run: ./scripts/ci/install_lean.sh
@@ -92,6 +107,7 @@ jobs:
       # The key is computed from the VERIFIER checkout (the trusted base), not
       # the submission checkout, so a fork cannot steer which cache it gets.
       - name: Restore Lean dependency cache
+        if: steps.reuse.outputs.reused != 'true'
         uses: actions/cache/restore@v4
         with:
           path: .lake/packages
@@ -103,6 +119,7 @@ jobs:
       # from the repository root, so the entry has to be restored at the same
       # relative path and then moved into the checkout.
       - name: Move restored dependencies into the checkout
+        if: steps.reuse.outputs.reused != 'true'
         run: |
           set -euo pipefail
           if [ -d .lake/packages ]; then
@@ -121,6 +138,7 @@ jobs:
       # them, because it builds the whole library.
 
       - name: Restore Lean build cache
+        if: steps.reuse.outputs.reused != 'true'
         uses: actions/cache/restore@v4
         with:
           path: .lake/build
@@ -129,6 +147,7 @@ jobs:
             lake-build-${{ runner.os }}-
 
       - name: Move restored build into the checkout
+        if: steps.reuse.outputs.reused != 'true'
         run: |
           set -euo pipefail
           if [ -d .lake/build ]; then
@@ -150,6 +169,7 @@ jobs:
       # `TableGeneration/Submission/Policy{,/**}`, so the `lakefile.lean` and
       # `lean-toolchain` that `lake env` reads here are the base branch's.
       - name: Build the trusted parser imports on a cold runner
+        if: steps.reuse.outputs.reused != 'true'
         # Preflight has established these protected modules equal the trusted
         # base. No submitted Policy/helper is compiled here. A new private repo
         # cannot assume the upstream repository's build cache exists.
@@ -157,10 +177,12 @@ jobs:
         run: lake build TableGeneration.Policy TableGeneration.Baseline TableGeneration.Metrics TableGeneration.Spec
 
       - name: Check the submission syntax gate
+        if: steps.reuse.outputs.reused != 'true'
         working-directory: submission
         run: python3 ../verifier/scripts/test_submission_syntax_gate.py
 
       - name: Run verifier
+        if: steps.reuse.outputs.reused != 'true'
         working-directory: submission
         env:
           TABLE_GEN_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
@@ -176,7 +198,17 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: table-generation-submission-${{ github.run_id }}
+          name: table-generation-submission-${{ github.run_id }}-${{ github.run_attempt }}
           path: submission/artifacts/
           if-no-files-found: warn
           retention-days: 90
+
+      - name: Show verification outcome
+        if: always()
+        run: |
+          if [ -f submission/artifacts/table-generation-summary.md ]; then
+            cat submission/artifacts/table-generation-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f submission/artifacts/reused-verification.json ]; then
+            echo 'An identical accepted commit and verification configuration were reused. Lean was not rerun.' >> "$GITHUB_STEP_SUMMARY"
+          fi
