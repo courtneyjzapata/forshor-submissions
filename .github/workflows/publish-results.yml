@@ -41,7 +41,7 @@ jobs:
           script: |
             await require('./scripts/ci/publication.js').inspect({ github, context, core });
       - name: Download verifier output as data
-        if: steps.source.outputs.process == 'true'
+        if: steps.source.outputs.process == 'true' && steps.source.outputs.download == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ steps.source.outputs.artifact }}

@@ -55,13 +55,20 @@ Open the failed **Publish Verified Results** run and choose **Re-run failed
 jobs**, or run `gh run rerun PUBLISH_RUN_ID --repo zapatacomputing/forshor-submissions --failed`.
 This reruns only trusted publication; do not rerun **Verify Table Generation**.
 The source run and original attempt are fixed, and artifacts are named by both.
+Once verification is archived, recovery reads the trusted receipt and accepted
+files directly; it does not require the original run artifact. This matters
+because rerunning a GitHub workflow can remove earlier-attempt artifacts.
+For older frozen publication workflows that still contain an unconditional
+download step, a surviving later-attempt artifact is downloaded only as unused
+data; the trusted archive remains the sole source of accepted verification.
 Recovery also works after the submission PR closes, provided its head is still
 the verified commit and the branch still identifies the PR. A PR that has moved
 to a newer head is superseded and skipped. GitHub API outages/rate limits fail
 visibly rather than being mistaken for missing cache entries.
 
 Verifier artifacts are retained for 90 days; publication diagnostics for 14.
-Do not delete needed artifacts before recovery. If a stage's 100-job waiting
+Before verification is archived, its source artifact must still exist. After
+archival, modern recovery does not depend on artifact retention. If a stage's 100-job waiting
 queue fills, GitHub cancels additional arrivals visibly: rerun those runs after
 capacity is available. This is a bounded sprint queue, not an unlimited intake
 service. Retry exhaustion is a failed job with recovery instructions, never a

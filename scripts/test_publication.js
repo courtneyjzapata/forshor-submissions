@@ -144,3 +144,65 @@ test('artifact-selected PR identities and forged receipts are rejected', async (
   assert.doesNotThrow(() => publication.assertReceipt(receipt, identity));
   assert.throws(() => publication.assertReceipt({ ...receipt, key: 'forged' }, identity), /Invalid trusted/);
 });
+
+test('accepted verification recovers after the original run artifact disappears', async t => {
+  const identity = publication.verificationIdentity(HEAD);
+  const receipt = { ...identity, runId: '123', runAttempt: 1, pullRequest: 1 };
+  const index = { policies: [{ policy_id: HEAD, source: {
+    repository: 'zapatacomputing/forshor-submissions', run_id: '123', pr_number: '1',
+  } }] };
+  const event = { id: 123, run_attempt: 1, event: 'pull_request', conclusion: 'success',
+    path: '.github/workflows/table-generation-submission.yml', head_sha: HEAD };
+  const output = {};
+  t.mock.method(fs, 'writeFileSync', () => {});
+  const github = { paginate: async (method, params) => method(params), rest: {
+    actions: {
+      getWorkflowRunAttempt: async () => ({ data: event }),
+      listWorkflowRunArtifacts: async () => ({ data: { artifacts: [
+        { name: 'table-generation-submission-123-2', expired: false },
+      ] } }),
+    },
+    repos: {
+      listPullRequestsAssociatedWithCommit: async () => [{ number: 1, base: { ref: 'main' }, head: { sha: HEAD } }],
+      getContent: async ({ path: name }) => ({ data: { encoding: 'base64', content: Buffer.from(JSON.stringify(
+        name.startsWith('results/evaluations/') ? receipt : index)).toString('base64') } }),
+    },
+    pulls: { listFiles: async () => [{ filename: 'TableGeneration/Submission/Policy.lean' }] },
+  } };
+  await publication.inspect({ github, context: { ...context, payload: { workflow_run: event } },
+    core: { setOutput(k, v) { output[k] = v; } } });
+  assert.equal(output.process, 'true');
+  assert.equal(output.download, 'false');
+  assert.equal(output.artifact, 'table-generation-submission-123-2');
+  github.rest.actions.listWorkflowRunArtifacts = async () => ({ data: { artifacts: [] } });
+  await publication.inspect({ github, context: { ...context, payload: { workflow_run: event } },
+    core: { setOutput(k, v) { output[k] = v; } } });
+  assert.equal(output.download, 'false', 'modern recovery needs no surviving run artifact');
+});
+
+test('recovery derives publication only from the trusted archive and never reads replacement artifacts', async t => {
+  const identity = publication.verificationIdentity(HEAD);
+  const receipt = { ...identity, runId: '123', runAttempt: 1, pullRequest: 1 };
+  const index = { policies: [{ policy_id: HEAD, source: {
+    repository: 'zapatacomputing/forshor-submissions', run_id: '123', pr_number: '1',
+  } }] };
+  const originalRead = fs.readFileSync;
+  const writes = new Map();
+  t.mock.method(fs, 'readFileSync', (name, ...args) => {
+    if (name === 'publication-source.json') return JSON.stringify({ run: { id: 123 }, pr: { headSha: HEAD, number: 1 } });
+    assert.ok(!String(name).startsWith('artifacts/'), 'replacement artifacts must not be used as verification');
+    return originalRead(name, ...args);
+  });
+  t.mock.method(fs, 'writeFileSync', (name, content) => writes.set(name, content));
+  const github = { rest: {
+    repos: { getContent: async ({ path: name }) => ({ data: { encoding: 'base64', content: Buffer.from(JSON.stringify(
+      name.startsWith('results/evaluations/') ? receipt : index)).toString('base64') } }) },
+    pulls: { get: async () => ({ data: { user: { login: 'contributor' }, html_url: 'https://github.com/zapatacomputing/forshor-submissions/pull/1', created_at: '2026-01-01T00:00:00Z' } }) },
+  } };
+  const summary = { addHeading() { return this; }, addLink() { return this; }, addRaw() { return this; }, async write() {} };
+  await publication.archive({ github, context, core: { summary } });
+  const metadata = JSON.parse(writes.get('evaluation-metadata.json'));
+  assert.equal(metadata.runId, '123');
+  assert.equal(metadata.headSha, HEAD);
+  assert.equal(metadata.evaluationKey, publication.evaluationKey(identity));
+});

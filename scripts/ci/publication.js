@@ -29,6 +29,16 @@ async function readJson(github, context, path) {
   }
 }
 
+async function acceptedReceipt(github, context, identity) {
+  const receipt = await readJson(github, context, `results/evaluations/${identity.key}.json`);
+  if (!receipt) return null;
+  assertReceipt(receipt, identity);
+  const index = await readJson(github, context, 'leaderboard/results.json');
+  const policy = index?.policies.find(p => p.policy_id === identity.headSha);
+  return policy?.source.repository === REPOSITORY && policy.source.run_id === receipt.runId
+    && Number(policy.source.pr_number) === receipt.pullRequest ? receipt : null;
+}
+
 async function inspect({ github, context, core }) {
   const event = context.payload.workflow_run;
   if (!event || event.event !== 'pull_request' || event.path !== '.github/workflows/table-generation-submission.yml'
@@ -56,9 +66,21 @@ async function inspect({ github, context, core }) {
     core.setOutput('process', 'false');
     return;
   }
+  const receipt = await acceptedReceipt(github, context, verificationIdentity(pr.headSha));
+  let artifact = `table-generation-submission-${run.id}-${event.run_attempt}`;
+  if (receipt) {
+    // Modern workflows skip download entirely once the trusted archive owns
+    // verification. For an older, frozen workflow YAML that still downloads,
+    // choose a surviving artifact only as unused data. Its contents cannot
+    // grant reuse or replace the trusted archived result.
+    const { data } = await github.rest.actions.listWorkflowRunArtifacts({ ...context.repo, run_id: run.id, per_page: 100 });
+    const available = data.artifacts.filter(a => !a.expired && a.name.startsWith(`table-generation-submission-${run.id}-`));
+    artifact = available.find(a => a.name === artifact)?.name || available[0]?.name || artifact;
+  }
   fs.writeFileSync('publication-source.json', JSON.stringify({ run, pr }));
   core.setOutput('process', 'true');
-  core.setOutput('artifact', `table-generation-submission-${run.id}-${event.run_attempt}`);
+  core.setOutput('download', receipt ? 'false' : 'true');
+  core.setOutput('artifact', artifact);
 }
 
 function assertReceipt(receipt, identity) {
@@ -71,23 +93,10 @@ function assertReceipt(receipt, identity) {
 async function archive({ github, context, core }) {
   const { run, pr } = JSON.parse(fs.readFileSync('publication-source.json', 'utf8'));
   const identity = verificationIdentity(pr.headSha);
-  let receipt = await readJson(github, context, `results/evaluations/${identity.key}.json`);
-  if (receipt) {
-    assertReceipt(receipt, identity);
-    const index = await readJson(github, context, 'leaderboard/results.json');
-    const policy = index?.policies.find(p => p.policy_id === pr.headSha);
-    if (policy?.source.run_id !== receipt.runId || Number(policy?.source.pr_number) !== receipt.pullRequest)
-      receipt = null; // Same commit under another configuration: verify again.
-  }
-  const reused = fs.existsSync('artifacts/reused-verification.json');
-  if (reused) {
-    const marker = JSON.parse(fs.readFileSync('artifacts/reused-verification.json', 'utf8'));
-    assertReceipt(marker, identity);
-    if (!receipt || marker.runId !== receipt.runId || marker.runAttempt !== receipt.runAttempt)
-      throw new Error('The reuse marker does not identify a trusted accepted verification');
-  }
+  let receipt = await acceptedReceipt(github, context, identity);
+  const reused = Boolean(receipt);
   if (!receipt) {
-    if (reused) throw new Error('No trusted verification to reuse');
+    if (fs.existsSync('artifacts/reused-verification.json')) throw new Error('No trusted verification to reuse');
     const marker = JSON.parse(fs.readFileSync('artifacts/verification-identity.json', 'utf8'));
     if (Object.entries(identity).some(([key, value]) => marker[key] !== value))
       throw new Error('Verification configuration changed; rerun verification against current main');
@@ -107,7 +116,7 @@ async function archive({ github, context, core }) {
     githubLogin: details.user.login, pullRequestUrl: details.html_url,
     submittedAt: details.created_at, evaluationKey: evaluationKey(identity),
   }));
-  await core.summary.addHeading(receipt.runId === String(run.id) && !reused ? 'Verified submission archived' : 'Reusing accepted verification')
+  await core.summary.addHeading(reused ? 'Reusing accepted verification' : 'Verified submission archived')
     .addLink('Verified source run', `https://github.com/${REPOSITORY}/actions/runs/${receipt.runId}/attempts/${receipt.runAttempt}`)
     .addRaw('\n\nThe publication step can be retried independently of Lean verification.\n').write();
 }
