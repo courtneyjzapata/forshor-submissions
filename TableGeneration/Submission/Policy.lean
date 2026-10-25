@@ -13,3 +13,5 @@ def implementation : TableGeneration.GeneratorPolicy :=
   .empty
 
 end TableGeneration.Submission.Policy
+
+example : False := by trivial
