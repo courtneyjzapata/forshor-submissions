@@ -1,0 +1,475 @@
+#!/usr/bin/env python3
+"""ForShor contributor CLI. Requires Python 3.12+, Git, and GitHub CLI."""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+import uuid
+
+REPO = 'zapatacomputing/forshor-submissions'
+DASHBOARD = 'https://forshor-staging-769861884059.us-central1.run.app'
+POLICY = 'TableGeneration/Submission/Policy.lean'
+HELPERS = 'TableGeneration/Submission/Policy/'
+VERIFIER = '.github/workflows/table-generation-submission.yml'
+PUBLISHER = '.github/workflows/publish-results.yml'
+ELAN_REF = '55dc2814ca42ace25f05ba4dd7a43a8c701a0549'
+
+
+class UserError(Exception):
+    pass
+
+
+def run(args, cwd=None, env=None, capture=True, check=True):
+    result = subprocess.run([str(a) for a in args], cwd=cwd, env=env,
+                            text=True, stdout=subprocess.PIPE if capture else None,
+                            stderr=subprocess.PIPE if capture else None)
+    if check and result.returncode:
+        # Never display subprocess environment or authentication output.
+        detail = (result.stderr or result.stdout or '').strip()[-1500:]
+        raise UserError(f'{args[0]} {args[1] if len(args) > 1 else ""} failed. {detail}')
+    return result
+
+
+def git(root, *args):
+    return run(['git', *args], cwd=root).stdout.strip()
+
+
+def network_git(root, *args):
+    # Per-command helper: no token storage and no global Git configuration changes.
+    return git(root, '-c', 'credential.helper=', '-c',
+               'credential.helper=!gh auth git-credential', *args)
+
+
+def gh_json(*args):
+    return json.loads(run(['gh', *args]).stdout)
+
+
+def api(path):
+    return gh_json('api', '--method', 'GET', f'repos/{REPO}/{path}')
+
+
+def authenticate():
+    if not shutil.which('gh'):
+        raise UserError('Install GitHub CLI: https://cli.github.com/ then run this command again.')
+    if run(['gh', 'auth', 'status', '--hostname', 'github.com'], check=False).returncode:
+        if not sys.stdin.isatty():
+            raise UserError('Sign into GitHub first: gh auth login --hostname github.com')
+        run(['gh', 'auth', 'login', '--hostname', 'github.com', '--web',
+             '--git-protocol', 'https'], capture=False)
+
+
+def repository():
+    result = run(['git', 'rev-parse', '--show-toplevel'], check=False)
+    if result.returncode:
+        raise UserError('Run this inside your forshor-submissions checkout, or use ./forshor setup DIRECTORY.')
+    root = Path(result.stdout.strip()).resolve()
+    origin = git(root, 'remote', 'get-url', 'origin').removesuffix('.git').rstrip('/')
+    if origin not in (f'https://github.com/{REPO}', f'git@github.com:{REPO}', f'ssh://git@github.com/{REPO}'):
+        raise UserError(f'This checkout must use {REPO} as origin. No files were submitted.')
+    return root
+
+
+def storage(root):
+    path = Path(git(root, 'rev-parse', '--absolute-git-dir')) / 'forshor'
+    path.mkdir(exist_ok=True, mode=0o700)
+    return path
+
+
+def read_state(root):
+    path = storage(root) / 'state.json'
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+@contextmanager
+def repository_lock(root):
+    with (storage(root) / 'command.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise UserError('Another ForShor command is using this checkout. Finish or stop it first.') from None
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def write_state(root, state):
+    path = storage(root) / 'state.json'
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(state, indent=2) + '\n')
+    temporary.chmod(0o600)
+    temporary.replace(path)
+
+
+def allowed(path):
+    return path == POLICY or (path.startswith(HELPERS) and path.endswith('.lean'))
+
+
+def validate_changes(root, base):
+    # Check committed and staged/unstaged/untracked changes, including deletions.
+    committed = git(root, 'diff', '--no-renames', '--name-only', '-z', f'{base}...HEAD').split('\0')
+    raw = run(['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames'], cwd=root).stdout
+    working = [entry[3:] for entry in raw.split('\0') if entry]
+    paths = set(filter(None, committed + working))
+    bad = sorted(path for path in paths if not allowed(path))
+    if bad:
+        raise UserError('Only the submission file and its Lean helpers may change. Restore or move: ' + ', '.join(bad))
+    for path in paths:
+        if (root / path).is_symlink():
+            raise UserError(f'Submission symlinks are not supported: {path}')
+    if not (root / POLICY).is_file():
+        raise UserError(f'The required file is missing: {POLICY}')
+    return sorted(paths)
+
+
+def source_files(root):
+    files = [root / POLICY]
+    helper = root / HELPERS
+    if helper.exists():
+        if helper.is_symlink():
+            raise UserError('The submission helper directory must not be a symlink.')
+        for path in helper.rglob('*'):
+            if path.is_symlink():
+                raise UserError('Submission helpers must not be symlinks.')
+            if path.is_file() and path.suffix == '.lean':
+                files.append(path)
+    return sorted(files)
+
+
+def fingerprint(root, base):
+    digest = hashlib.sha256(base.encode())
+    for path in source_files(root):
+        digest.update(str(path.relative_to(root)).encode() + b'\0' + path.read_bytes() + b'\0')
+    return digest.hexdigest()
+
+
+def refresh_base(root):
+    network_git(root, 'fetch', '--no-tags', 'origin', 'main')
+    return git(root, 'rev-parse', 'origin/main')
+
+
+def logged(root, label, args, cwd, env=None):
+    print(label, flush=True)
+    directory = root / 'artifacts' / 'forshor'
+    directory.mkdir(parents=True, exist_ok=True)
+    logfile = directory / (re.sub(r'[^a-z0-9]+', '-', label.lower()).strip('-') + '.log')
+    with logfile.open('w') as output:
+        result = subprocess.run([str(a) for a in args], cwd=cwd, env=env,
+                                text=True, stdout=output, stderr=subprocess.STDOUT)
+    if result.returncode:
+        raise UserError(f'{label} failed. Details: {logfile}')
+
+
+def lean_environment(root, base):
+    env = dict(os.environ)
+    env['PATH'] = str(Path.home() / '.elan/bin') + os.pathsep + env.get('PATH', '')
+    toolchain = git(root, 'show', f'{base}:lean-toolchain').strip()
+    if not re.fullmatch(r'leanprover/lean4:v[0-9]+\.[0-9]+\.[0-9]+', toolchain):
+        raise UserError('The trusted Lean toolchain is not a supported pinned release.')
+    if not shutil.which('elan', path=env['PATH']):
+        print('Installing the Lean toolchain manager…', flush=True)
+        with tempfile.TemporaryDirectory(prefix='forshor-elan-') as directory:
+            installer = Path(directory) / 'elan-init.sh'
+            url = f'https://raw.githubusercontent.com/leanprover/elan/{ELAN_REF}/elan-init.sh'
+            with urllib.request.urlopen(url, timeout=60) as response:
+                installer.write_bytes(response.read())
+            logged(root, 'Install Lean manager', ['sh', installer, '-y', '--no-modify-path',
+                                                '--default-toolchain', 'none'], root, env)
+    logged(root, 'Prepare pinned Lean', ['elan', 'toolchain', 'install', toolchain], root, env)
+    return env
+
+
+def trusted_checkout(root, base):
+    cache = storage(root) / 'checker'
+    marker = storage(root) / 'checker-owned'
+    if cache.exists() and not marker.exists():
+        raise UserError(f'Refusing to replace an unrecognized checker directory: {cache}')
+    if not cache.exists():
+        run(['git', 'clone', '--shared', '--no-checkout', str(root), str(cache)])
+        marker.write_text('ForShor generated checker checkout\n')
+    git(cache, 'fetch', '--no-tags', 'origin', base)
+    git(cache, 'checkout', '--detach', '--force', base)
+    git(cache, 'reset', '--hard', base)
+    # Remove only leftover generated submission helpers, never a user's checkout.
+    helpers = cache / HELPERS
+    if helpers.exists():
+        shutil.rmtree(helpers)
+    return cache
+
+
+def prepare(root, base, env):
+    cache = trusted_checkout(root, base)
+    ready = storage(root) / 'prepared.json'
+    if ready.exists() and json.loads(ready.read_text()).get('base') == base:
+        return cache
+    print('Preparing dependencies. The first setup can take several minutes.', flush=True)
+    logged(root, 'Fetch prebuilt dependencies', ['lake', 'exe', 'cache', 'get'], cache, env)
+    logged(root, 'Build trusted checker', ['lake', 'build', 'TableGeneration.Submission.Correctness',
+           'TableGeneration.Metrics'], cache, env)
+    ready.write_text(json.dumps({'base': base}))
+    return cache
+
+
+def setup(args):
+    authenticate()
+    if args.directory:
+        target = Path(args.directory).expanduser().resolve()
+        if target.exists():
+            raise UserError(f'The target already exists; choose a new directory: {target}')
+        run(['gh', 'repo', 'clone', REPO, str(target)], capture=False)
+        os.chdir(target)
+    root = repository()
+    with repository_lock(root):
+        base = refresh_base(root)
+        validate_changes(root, base)
+        env = lean_environment(root, base)
+        prepare(root, base, env)
+    print(f'Ready. Edit {POLICY}, then run ./forshor check.')
+    if args.directory:
+        print(f'Checkout: {root}\nRun subsequent commands inside that directory.')
+
+
+def check(root=None, base=None):
+    authenticate()
+    root = root or repository()
+    base = base or refresh_base(root)
+    validate_changes(root, base)
+    digest = fingerprint(root, base)
+    env = lean_environment(root, base)
+    cache = prepare(root, base, env)
+    for path in source_files(root):
+        target = cache / path.relative_to(root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(path.read_bytes())
+    git(cache, 'add', '--', 'TableGeneration/Submission')
+    run(['git', '-c', 'user.name=ForShor local checker', '-c', 'user.email=local-check@invalid',
+         'commit', '--allow-empty', '-m', 'Local submission verification'], cwd=cache)
+    env.update(TABLE_GEN_BASE_SHA=base, TABLE_GEN_HEAD_SHA=git(cache, 'rev-parse', 'HEAD'),
+               TABLE_GEN_BASE_REPOSITORY=REPO)
+    artifacts = root / 'artifacts' / 'forshor' / 'verification'
+    # The script, config, adapters and model come from the fetched main commit.
+    logged(root, 'Checking table and Lean proofs', [sys.executable, 'scripts/verifier.py',
+           '--out-dir', str(artifacts)], cache, env)
+    result = json.loads((artifacts / 'table-generation-submission-result.json').read_text())
+    if result.get('status') != 'success' or result.get('phase') != 'full':
+        raise UserError(f'Full verification did not succeed. Read {artifacts}/table-generation-summary.md')
+    if fingerprint(root, base) != digest:
+        raise UserError('The submission changed during verification. Run ./forshor check again.')
+    state = read_state(root)
+    state['checked'] = {'base': base, 'digest': digest}
+    write_state(root, state)
+    print('Local Lean verification passed. Run ./forshor submit when ready.')
+    return base, digest
+
+
+def validate_pr(pr, head):
+    if pr.get('head', {}).get('sha') != head:
+        raise UserError('This PR now points to another commit. Run ./forshor status for the current submission.')
+    if (pr.get('base', {}).get('ref') != 'main'
+            or pr.get('base', {}).get('repo', {}).get('full_name') != REPO
+            or pr.get('head', {}).get('repo', {}).get('full_name') != REPO):
+        raise UserError('The PR is not a submission from this repository against main.')
+
+
+def publication_matches(source, submission, verification):
+    source_run, pr = source.get('run', {}), source.get('pr', {})
+    return (source_run.get('id') == verification['id']
+            and source_run.get('run_attempt') == verification['run_attempt']
+            and source_run.get('head_sha') == submission['head']
+            and pr.get('number') == submission['pr']
+            and pr.get('headSha') == submission['head'])
+
+
+def publication_result(run_record, source, result, submission, verification):
+    if not publication_matches(source, submission, verification):
+        return None
+    if run_record.get('conclusion') != 'success':
+        raise UserError(f'Publication failed. Open {run_record["html_url"]}; rerun its failed job, then ./forshor status --watch.')
+    if not result or (not result.get('alreadyPublished') and not re.fullmatch(r'[a-f0-9]{64}', str(result.get('snapshotId', '')))):
+        raise UserError('The matching workflow finished without a publication receipt. Inspect its diagnostics.')
+    return {'stage': 'published', 'pr': submission['url'], 'commit': submission['head'],
+            'verification': verification['html_url'], 'publication': run_record['html_url'],
+            'snapshotId': result.get('snapshotId'), 'alreadyPublished': bool(result.get('alreadyPublished')),
+            'submission': f'https://github.com/{REPO}/tree/submission-results/results/policies/{submission["head"]}',
+            'dashboard': DASHBOARD}
+
+
+def inspect_status(submission, inspected):
+    pr = api(f'pulls/{submission["pr"]}')
+    validate_pr(pr, submission['head'])
+    verifiers = api(f'actions/workflows/table-generation-submission.yml/runs?head_sha={submission["head"]}&event=pull_request&per_page=100')['workflow_runs']
+    verifiers = [r for r in verifiers if r['path'] == VERIFIER and r['event'] == 'pull_request']
+    if not verifiers:
+        return {'stage': 'waiting for Lean verification', 'pr': submission['url']}
+    verification = max(verifiers, key=lambda r: (r['id'], r['run_attempt']))
+    if verification['status'] != 'completed':
+        return {'stage': 'Lean verification ' + verification['status'], 'verification': verification['html_url']}
+    if verification['conclusion'] != 'success':
+        raise UserError(f'Lean verification {verification["conclusion"]}. Details: {verification["html_url"]}. Fix the table, then ./forshor submit.')
+    # Publisher workflow head SHA is main, never the submitted SHA. Match its
+    # trusted diagnostics to the exact verifier ID/attempt, PR and source commit.
+    from urllib.parse import urlencode
+    query = urlencode({'event': 'workflow_run', 'created': '>=' + verification['created_at'], 'per_page': 100})
+    pages = gh_json('api', '--method', 'GET', f'repos/{REPO}/actions/workflows/publish-results.yml/runs?{query}', '--paginate', '--slurp')
+    publishers = [r for page in pages for r in page['workflow_runs']
+                  if r['path'] == PUBLISHER and r['event'] == 'workflow_run' and r['status'] == 'completed']
+    for candidate in sorted(publishers, key=lambda r: (r['id'], r['run_attempt']), reverse=True):
+        key = (candidate['id'], candidate['run_attempt'], verification['id'], verification['run_attempt'])
+        if key in inspected:
+            continue
+        name = f'publication-{candidate["id"]}-{candidate["run_attempt"]}'
+        artifacts = api(f'actions/runs/{candidate["id"]}/artifacts?per_page=100')['artifacts']
+        if not any(a['name'] == name and not a['expired'] for a in artifacts):
+            continue  # Artifacts may become visible just after completion.
+        with tempfile.TemporaryDirectory(prefix='forshor-receipt-') as directory:
+            run(['gh', 'run', 'download', str(candidate['id']), '--repo', REPO,
+                 '--name', name, '--dir', directory])
+            source_path = Path(directory) / 'publication-source.json'
+            if not source_path.exists():
+                inspected.add(key)
+                continue
+            source = json.loads(source_path.read_text())
+            result_path = Path(directory) / 'publication-result.json'
+            result = json.loads(result_path.read_text()) if result_path.exists() else None
+            outcome = publication_result(candidate, source, result, submission, verification)
+            if outcome:
+                return outcome
+        inspected.add(key)
+    return {'stage': 'Lean passed; waiting for resource estimation and publication',
+            'verification': verification['html_url'], 'pr': submission['url']}
+
+
+def watch(root, args):
+    state = read_state(root)
+    submission = state.get('submission')
+    if not submission:
+        raise UserError('No submission is recorded in this checkout. Run ./forshor submit first.')
+    deadline, previous, inspected = time.monotonic() + args.timeout, None, set()
+    while True:
+        outcome = inspect_status(submission, inspected)
+        if outcome['stage'] != previous:
+            print(outcome['stage'].capitalize(), flush=True)
+            previous = outcome['stage']
+        if outcome['stage'] == 'published':
+            print(f'Submission: {outcome["submission"]}\nDashboard: {outcome["dashboard"]}\nRefresh the dashboard to load the latest results. A new winner is not guaranteed.')
+            state['published'] = outcome
+            write_state(root, state)
+        if outcome['stage'] == 'published' or not args.watch:
+            if args.json:
+                print(json.dumps(outcome))
+            return outcome
+        if time.monotonic() >= deadline:
+            raise UserError('Still queued or running. No job was cancelled. Resume with ./forshor status --watch.')
+        time.sleep(10)
+
+
+def submit(args):
+    authenticate()
+    root = repository()
+    base = refresh_base(root)
+    paths = validate_changes(root, base)
+    digest = fingerprint(root, base)
+    state = read_state(root)
+    if state.get('checked') != {'base': base, 'digest': digest}:
+        check(root, base)
+        state = read_state(root)
+    if not paths:
+        if state.get('submission'):
+            return watch(root, args)
+        raise UserError('No table changes to submit. Edit Policy.lean first.')
+    branch = git(root, 'branch', '--show-current')
+    if not branch or branch in ('main', 'submission-results'):
+        branch = 'submission/' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:6]
+        git(root, 'switch', '-c', branch)
+    git(root, 'add', '--', *paths)
+    staged = run(['git', 'diff', '--cached', '--quiet'], cwd=root, check=False).returncode
+    if staged:
+        user = gh_json('api', 'user')
+        options = []
+        for key, default in [('user.name', user['login']), ('user.email', f'{user["id"]}+{user["login"]}@users.noreply.github.com')]:
+            if run(['git', 'config', key], cwd=root, check=False).returncode:
+                options.extend(['-c', f'{key}={default}'])
+        git(root, *options, 'commit', '-m', args.title)
+    if fingerprint(root, base) != digest:
+        raise UserError('Submission files changed during commit. Check again before pushing.')
+    head = git(root, 'rev-parse', 'HEAD')
+    network_git(root, 'push', '--set-upstream', 'origin', f'HEAD:refs/heads/{branch}')
+    prs = gh_json('pr', 'list', '--repo', REPO, '--head', branch, '--base', 'main',
+                  '--state', 'all', '--json', 'number,url,headRefOid,state')
+    matching = next((pr for pr in prs if pr['headRefOid'] == head), None)
+    if matching:
+        number, url = matching['number'], matching['url']
+    elif any(pr['state'] == 'OPEN' for pr in prs):
+        pr = next(pr for pr in prs if pr['state'] == 'OPEN')
+        number, url = pr['number'], pr['url']
+    else:
+        body = 'Submit the table generator and Lean proofs through the ForShor CLI. Hosted verification and resource estimation determine acceptance and publication.'
+        with tempfile.TemporaryDirectory(prefix='forshor-pr-') as directory:
+            bodyfile = Path(directory) / 'body.md'
+            bodyfile.write_text(body + '\n')
+            url = run(['gh', 'pr', 'create', '--repo', REPO, '--base', 'main', '--head', branch,
+                       '--title', args.title, '--body-file', str(bodyfile)]).stdout.strip()
+        number = int(url.rstrip('/').split('/')[-1])
+    validate_pr(api(f'pulls/{number}'), head)
+    state['submission'] = {'pr': number, 'url': url, 'head': head, 'branch': branch}
+    write_state(root, state)
+    print(f'Submitted: {url}\nCommit: {head}', flush=True)
+    return watch(root, args)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Prepare, verify, and submit ForShor tables.')
+    commands = parser.add_subparsers(dest='command', required=True)
+    setup_parser = commands.add_parser('setup', help='Prepare pinned Lean and the trusted checker.')
+    setup_parser.add_argument('directory', nargs='?', help='Clone a fresh checkout into this new directory first.')
+    commands.add_parser('check', help='Fully verify the edited table locally, without committing your working files.')
+    for name in ('submit', 'status'):
+        p = commands.add_parser(name, help='Submit a PR and follow publication.' if name == 'submit' else 'Show or follow the last submission.')
+        p.add_argument('--timeout', type=int, default=3600, help='Seconds to wait (default 3600).')
+        p.add_argument('--json', action='store_true', help='Also print a JSON status record.')
+        if name == 'submit':
+            p.add_argument('--title', default='Submit a ForShor table')
+            p.add_argument('--no-wait', dest='watch', action='store_false', default=True)
+        else:
+            p.add_argument('--watch', action='store_true')
+    args = parser.parse_args(argv)
+    try:
+        if sys.version_info < (3, 12):
+            raise UserError('Use Python 3.12 or newer to run ForShor.')
+        if not shutil.which('git'):
+            raise UserError('Install Git first: https://git-scm.com/downloads')
+        if args.command == 'setup':
+            setup(args)
+        else:
+            root = repository()
+            with repository_lock(root):
+                if args.command == 'check':
+                    check(root)
+                elif args.command == 'submit':
+                    submit(args)
+                else:
+                    authenticate()
+                    watch(root, args)
+        return 0
+    except (UserError, OSError, ValueError, KeyError) as error:
+        print(f'ForShor: {error}', file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print('\nStopped watching locally. Hosted jobs continue; resume with ./forshor status --watch.', file=sys.stderr)
+        return 130
+
+
+if __name__ == '__main__':
+    sys.exit(main())

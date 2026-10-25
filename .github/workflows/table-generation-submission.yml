@@ -5,6 +5,15 @@ on:
     types: [opened, reopened, synchronize, ready_for_review]
     branches:
       - main
+    # CLI/docs-only maintenance is not a table submission. Mixed changes still
+    # trigger the trusted verifier, which rejects every disallowed file.
+    paths-ignore:
+      - forshor
+      - scripts/test_contributor_cli.py
+      - .github/workflows/contributor-cli.yml
+      - .github/workflows/table-generation-submission.yml
+      - README.md
+      - docs/CLI.md
   workflow_dispatch:
 
 permissions:

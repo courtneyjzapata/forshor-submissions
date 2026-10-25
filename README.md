@@ -1,5 +1,34 @@
 # Private ForShor submission pipeline
 
+## Contribute with the CLI
+
+With [GitHub CLI](https://cli.github.com/), Git, and Python 3.12 or newer installed:
+
+```sh
+gh auth status || gh auth login
+gh repo clone zapatacomputing/forshor-submissions
+cd forshor-submissions
+./forshor setup
+
+# Develop your table generator and Lean proofs in:
+# TableGeneration/Submission/Policy.lean
+./forshor check
+./forshor submit
+```
+
+The first setup prepares pinned Lean and prebuilt dependencies, then warms the
+trusted checker; it can take several minutes. `check` runs full local verification
+over your current edits. `submit` checks freshness, creates or updates a PR, and
+follows that exact submission through hosted Lean verification, resource
+estimation, and publication. It prints the accepted-source and dashboard links.
+Refresh staging after publication; acceptance does not guarantee a new winner.
+
+No new website account or API key is needed. Your GitHub account needs access to
+this private repository; the staging website retains its separate password login.
+See [CLI behavior and recovery](docs/CLI.md) or `./forshor --help`.
+
+## Pipeline implementation
+
 The trusted main-only cache workflows prepare compiled Lean dependencies and a complete pinned Python environment. Publication restores the Python environment read-only and installs packages only on an exact cache miss. The environment key includes OS/architecture, Python patch version, and the dependency lock digest; the Python jobs use Ubuntu 24.04. Submission code cannot write either trusted cache.
 
 This is Zapata’s private sprint copy of `VerifiedQC/ShorTableOptimization`, pinned initially to `5a70873b25b1f54a3043d3153caad7ded350abc1`. The upstream verifier contract, Lean statements, benchmark targets, and scientific estimator equations are preserved.
