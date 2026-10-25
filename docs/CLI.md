@@ -50,10 +50,11 @@ existing accepted submission instead.
 
 ## Publication and recovery
 
-There are two hosted workflows: Verify Table Generation, then Publish Verified
+There are two hosted workflows: Table submission, then Publish Verified
 Results. The publisher's Git head points to main, not the submitted commit.
-Both report checks on your PR: **Verifier**, then **Qualtran estimation and
-publication**. If Lean fails, the second check is skipped and the PR stays open.
+Both report checks on your PR under **Table submission**: **Verify table with
+Lean**, then **Estimate resources with Qualtran and publish results**.
+If Lean fails, the second check is skipped and the PR stays open.
 When Google confirms publication, the publisher posts links to the accepted
 table and staging dashboard, then closes the PR without merging it. A failed
 estimation, publication, or final reporting step keeps the second check red;

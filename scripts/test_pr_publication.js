@@ -160,8 +160,10 @@ test('GitHub Actions canonicalizes details_url without changing trusted check ow
 
 test('recovery upgrades a pending check created before publisher ownership was embedded', () => fixture(async f => {
   await f.begin(); f.checks[0].external_id = 'forshor-publication:123:1';
+  f.checks[0].name = 'Qualtran estimation and publication';
   await f.begin(); await f.finish();
   assert.equal(f.checks.length, 1); assert.equal(f.checks[0].conclusion, 'success');
+  assert.equal(f.checks[0].name, lifecycle.NAME);
   assert.equal(f.checks[0].external_id, `forshor-publication:123:1:456:${Number(process.env.GITHUB_RUN_ATTEMPT || 1)}`);
 }));
 

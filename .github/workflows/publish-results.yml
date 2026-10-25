@@ -1,7 +1,8 @@
 name: Publish Verified Results
 on:
   workflow_run:
-    workflows: [Verify Table Generation]
+    # Retain the old name so historical verification runs can still be retried.
+    workflows: [Table submission, Verify Table Generation]
     types: [completed]
 permissions: {}
 jobs:

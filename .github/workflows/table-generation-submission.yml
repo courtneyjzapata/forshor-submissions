@@ -1,4 +1,4 @@
-name: Verify Table Generation
+name: Table submission
 
 on:
   pull_request:
@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Verifier
+    name: Verify table with Lean
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Private sprint: one active verifier; retain up to 100 waiting runs.

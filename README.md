@@ -35,12 +35,12 @@ This is Zapata’s private sprint copy of `VerifiedQC/ShorTableOptimization`, pi
 
 For this copy, submission PRs target **main**. Change only `TableGeneration/Submission/Policy.lean` and optional Lean helper files under `TableGeneration/Submission/Policy/`. The template intentionally handles no targets. A known-valid existing implementation is used for the first end-to-end test; no new research is required.
 
-1. `Verify Table Generation` checks the submission with the trusted base verifier and Lean. It has no publication credentials.
+1. `Table submission` checks the submission with the trusted base verifier and Lean. Its check is named **Verify table with Lean**. It has no publication credentials.
 2. `Publish Verified Results` runs from main after success, resolves the PR and changed files through GitHub’s API, and archives verified source/results on `submission-results`. It does not execute the submitted source.
 3. The pinned estimator in `evaluation/estimator` evaluates the accepted catalog with the same Qualtran model as the existing website. Golden tests reproduce every original plan’s metrics/breakdowns and all table champions before publication.
 4. A short-lived, repository/workflow-restricted Google identity calls the IAM-protected results publisher. Google validates the shared v1 contract and uploads a complete immutable snapshot before atomically advancing the dashboard pointer.
 5. Private staging serves those results through its existing password-protected Google host. Updating data does not rebuild or redeploy the frontend.
-6. The same PR shows **Verifier** and **Qualtran estimation and publication** checks. After confirmed publication, the publisher comments with result links and closes the PR without merging. Rejected tables and failed publications stay open; pushing a fix reruns verification, while a publisher retry reuses accepted verification.
+6. The same PR shows **Verify table with Lean** and **Estimate resources with Qualtran and publish results** checks under **Table submission**. After confirmed publication, the publisher comments with result links and closes the PR without merging. Rejected tables and failed publications stay open; pushing a fix reruns verification, while a publisher retry reuses accepted verification.
 
 Estimator upstream: `courtneyjzapata/forshor-resource-estimation@fe58769bbd4ec6dfcc59e67771252e3382c051ba`. Qualtran is pinned to **0.7.0**, which reproduces the current published baseline; the source checkout’s expected vendored dependency was absent. Python dependencies are pinned in `evaluation/requirements.lock`. No estimator equations are modified.
 
@@ -83,7 +83,7 @@ planner/Qualtran equations and Jai's frontend are unchanged.
 
 Open the failed **Publish Verified Results** run and choose **Re-run failed
 jobs**, or run `gh run rerun PUBLISH_RUN_ID --repo zapatacomputing/forshor-submissions --failed`.
-This reruns only trusted publication; do not rerun **Verify Table Generation**.
+This reruns only trusted publication; do not rerun **Table submission**.
 The source run and original attempt are fixed, and artifacts are named by both.
 Once verification is archived, recovery reads the trusted receipt and accepted
 files directly; it does not require the original run artifact. This matters

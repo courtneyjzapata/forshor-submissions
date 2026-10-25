@@ -2,7 +2,8 @@
 
 // Trusted-main code only. No uploaded artifact chooses a PR, commit, or check.
 const fs = require('node:fs');
-const NAME = 'Qualtran estimation and publication';
+const NAME = 'Estimate resources with Qualtran and publish results';
+const CHECK_NAMES = new Set([NAME, 'Qualtran estimation and publication']);
 const STATE = 'publication-check.json';
 const REPOSITORY = 'zapatacomputing/forshor-submissions';
 const DASHBOARD = 'https://forshor-staging-769861884059.us-central1.run.app';
@@ -20,11 +21,11 @@ async function begin({ github, context, run, pr }) {
   const detailsUrl = workflowUrl(context);
   const externalId = `${sourceId}:${context.runId}:${Number(process.env.GITHUB_RUN_ATTEMPT || 1)}`;
   const checks = await github.paginate(github.rest.checks.listForRef, {
-    ...context.repo, ref: pr.headSha, check_name: NAME, filter: 'all', per_page: 100,
+    ...context.repo, ref: pr.headSha, filter: 'all', per_page: 100,
   });
   // Reuse the same source-attempt check on publisher retries. Only the Actions
   // app's checks qualify; a contributor cannot nominate another check ID.
-  const existing = checks.filter(c => c.name === NAME
+  const existing = checks.filter(c => CHECK_NAMES.has(c.name)
     && (c.external_id === sourceId || c.external_id?.startsWith(`${sourceId}:`))
     && c.head_sha === pr.headSha && c.app?.slug === 'github-actions').sort((a, b) => b.id - a.id)[0];
   const body = { ...context.repo, name: NAME, details_url: detailsUrl, external_id: externalId,
