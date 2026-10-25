@@ -187,7 +187,11 @@ def lean_environment(root, base):
                 installer.write_bytes(response.read())
             logged(root, 'Install Lean manager', ['sh', installer, '-y', '--no-modify-path',
                                                 '--default-toolchain', 'none'], root, env)
-    logged(root, 'Prepare pinned Lean', ['elan', 'toolchain', 'install', toolchain], root, env)
+    installed = run(['elan', 'toolchain', 'list'], cwd=root, env=env).stdout
+    if toolchain not in [line.split()[0] for line in installed.splitlines() if line.strip()]:
+        logged(root, 'Install pinned Lean', ['elan', 'toolchain', 'install', toolchain], root, env)
+    env['ELAN_TOOLCHAIN'] = toolchain
+    logged(root, 'Prepare pinned Lean', ['elan', 'run', toolchain, 'lean', '--version'], root, env)
     return env
 
 

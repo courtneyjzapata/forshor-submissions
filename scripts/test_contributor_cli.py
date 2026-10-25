@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -175,6 +176,27 @@ class PublicationIdentity(unittest.TestCase):
     def test_pr_moved_to_another_head_is_superseded(self):
         with self.assertRaisesRegex(cli.UserError, 'another commit'):
             cli.validate_pr({'head': {'sha': 'b' * 40}}, 'a' * 40)
+
+
+class ToolchainSetup(unittest.TestCase):
+    def test_existing_toolchain_is_reused_and_environment_is_pinned(self):
+        with patch.object(cli, 'git', return_value='leanprover/lean4:v4.28.0'), \
+                patch.object(cli.shutil, 'which', return_value='/bin/elan'), \
+                patch.object(cli, 'run', return_value=SimpleNamespace(stdout='leanprover/lean4:v4.28.0 (default)\n')), \
+                patch.object(cli, 'logged') as logged:
+            env = cli.lean_environment(Path('/tmp'), 'a' * 40)
+            self.assertEqual(env['ELAN_TOOLCHAIN'], 'leanprover/lean4:v4.28.0')
+            self.assertEqual(logged.call_count, 1)
+            self.assertEqual(logged.call_args.args[2], ['elan', 'run', 'leanprover/lean4:v4.28.0', 'lean', '--version'])
+
+    def test_missing_pinned_version_is_installed_without_changing_default(self):
+        with patch.object(cli, 'git', return_value='leanprover/lean4:v4.28.0'), \
+                patch.object(cli.shutil, 'which', return_value='/bin/elan'), \
+                patch.object(cli, 'run', return_value=SimpleNamespace(stdout='leanprover/lean4:v4.30.0\n')), \
+                patch.object(cli, 'logged') as logged:
+            cli.lean_environment(Path('/tmp'), 'a' * 40)
+            self.assertEqual(logged.call_args_list[0].args[2], ['elan', 'toolchain', 'install', 'leanprover/lean4:v4.28.0'])
+            self.assertEqual(logged.call_count, 2)
 
 
 if __name__ == '__main__':
