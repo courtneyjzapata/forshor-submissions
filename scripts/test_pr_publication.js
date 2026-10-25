@@ -92,6 +92,25 @@ test('publisher retry reuses its check/comment and does not reclose a closed acc
   assert.deepEqual(f.errors, []); assert.equal(f.checks[0].conclusion, 'success');
 }));
 
+test('lost-acknowledgement recovery accepts the Google publisher snapshot receipt', () => fixture(async f => {
+  f.write('publication-result.json', { alreadyPublished: true, snapshotId: 'd'.repeat(64), updatedAt: '2026-10-25T02:37:59.063Z' });
+  await f.begin(); await f.finish();
+  assert.deepEqual(f.errors, []); assert.equal(f.checks[0].conclusion, 'success');
+  assert.equal(f.pr.state, 'closed');
+}));
+
+test('a failed final check update reopens a PR closed by this attempt', () => fixture(async f => {
+  await f.begin();
+  const update = f.github.rest.checks.update;
+  f.github.rest.checks.update = async args => {
+    if (args.conclusion === 'success') throw new Error('Final check reporting interrupted');
+    return update(args);
+  };
+  await f.finish();
+  assert.equal(f.pr.state, 'open'); assert.equal(f.checks[0].conclusion, 'failure');
+  assert.deepEqual(f.errors, ['Final check reporting interrupted']);
+}));
+
 test('superseded source never closes a newer PR head', () => fixture(async f => {
   await f.begin(); f.pr.head.sha = OTHER; await f.finish();
   assert.equal(f.pr.state, 'open'); assert.equal(f.checks[0].conclusion, 'cancelled');

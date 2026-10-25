@@ -40,6 +40,7 @@ For this copy, submission PRs target **main**. Change only `TableGeneration/Subm
 3. The pinned estimator in `evaluation/estimator` evaluates the accepted catalog with the same Qualtran model as the existing website. Golden tests reproduce every original plan’s metrics/breakdowns and all table champions before publication.
 4. A short-lived, repository/workflow-restricted Google identity calls the IAM-protected results publisher. Google validates the shared v1 contract and uploads a complete immutable snapshot before atomically advancing the dashboard pointer.
 5. Private staging serves those results through its existing password-protected Google host. Updating data does not rebuild or redeploy the frontend.
+6. The same PR shows **Verifier** and **Qualtran estimation and publication** checks. After confirmed publication, the publisher comments with result links and closes the PR without merging. Rejected tables and failed publications stay open; pushing a fix reruns verification, while a publisher retry reuses accepted verification.
 
 Estimator upstream: `courtneyjzapata/forshor-resource-estimation@fe58769bbd4ec6dfcc59e67771252e3382c051ba`. Qualtran is pinned to **0.7.0**, which reproduces the current published baseline; the source checkout’s expected vendored dependency was absent. Python dependencies are pinned in `evaluation/requirements.lock`. No estimator equations are modified.
 
@@ -107,7 +108,7 @@ Local checks:
 
 ```sh
 node scripts/test_report_trust.js
-node --test scripts/test_publication.js
+node --test scripts/test_publication.js scripts/test_pr_publication.js
 python3 -m unittest discover -s scripts/ci -p 'test_*.py'
 python -m unittest discover -s evaluation -p 'test_*.py' # pinned Qualtran environment
 ```
@@ -248,7 +249,7 @@ artifacts. The comment links to the workflow run, the readable and JSON results,
 the benchmark index, and an archived source snapshot on the
 `submission-results` branch. Workflow artifacts and diagnostic logs are kept for
 90 days. A successful submission PR is closed automatically only after its
-results and source have been archived.
+results and source have been archived and the results have been published to staging.
 
 ## Two scores, not one
 

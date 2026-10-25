@@ -50,7 +50,7 @@ function receipt(source, metadata, result) {
       || !digest(metadata.evaluationKey)) throw new Error('Publication metadata does not match the verified PR');
   // Reused evaluations refer to the original trusted verifier run. The archive,
   // not a submitted receipt, supplies that identity (publication.archive).
-  if (result.alreadyPublished === true) {
+  if (result.alreadyPublished === true && result.evaluationKey !== undefined) {
     if (result.evaluationKey !== metadata.evaluationKey) throw new Error('Published evaluation identity does not match');
   } else if (!digest(result.snapshotId) || !Number.isFinite(Date.parse(result.updatedAt))) {
     throw new Error('Missing a complete successful publication receipt');
@@ -94,6 +94,7 @@ async function finalize({ github, context, core, outcome }) {
   const { data: check } = await github.rest.checks.get({ ...context.repo, check_run_id: state.checkId });
   if (check.details_url !== state.detailsUrl || state.detailsUrl !== workflowUrl(context)
       || check.external_id !== state.externalId || check.head_sha !== state.pr.headSha) return;
+  let closedHere = false;
   try {
     const source = JSON.parse(fs.readFileSync('publication-source.json', 'utf8'));
     if (source.pr.number !== state.pr.number || source.pr.headSha !== state.pr.headSha
@@ -127,8 +128,10 @@ async function finalize({ github, context, core, outcome }) {
     }
     if (pr.state === 'open') {
       const { data: closed } = await github.rest.pulls.update({ ...context.repo, pull_number: state.pr.number, state: 'closed' });
+      closedHere = true;
       if (!sameHead(closed, state)) {
         await github.rest.pulls.update({ ...context.repo, pull_number: state.pr.number, state: 'open' });
+        closedHere = false;
         await finishCheck(github, context, state, 'cancelled', 'Superseded submission', 'A push raced PR closure. The PR was reopened for the new commit.');
         return;
       }
@@ -136,6 +139,9 @@ async function finalize({ github, context, core, outcome }) {
     await finishCheck(github, context, state, 'success', 'Accepted and published',
       `[Results are on staging](${DASHBOARD}). The submission is archived and the PR is closed without merging.\n\n[Publisher details](${state.detailsUrl})`);
   } catch (error) {
+    // If final success reporting failed after our close, restore a recoverable
+    // open PR. Do not reopen a PR that was already closed before this attempt.
+    if (closedHere) await github.rest.pulls.update({ ...context.repo, pull_number: state.pr.number, state: 'open' });
     await finishCheck(github, context, state, 'failure', 'Publication reporting needs recovery',
       `Could not confirm publication and finish PR reporting. [Inspect and rerun the publisher](${state.detailsUrl}).`);
     core.setFailed(error.message);
