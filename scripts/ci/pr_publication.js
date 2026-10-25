@@ -16,19 +16,21 @@ function workflowUrl(context) {
 }
 
 async function begin({ github, context, run, pr }) {
-  const externalId = `forshor-publication:${run.id}:${run.run_attempt}`;
+  const sourceId = `forshor-publication:${run.id}:${run.run_attempt}`;
   const detailsUrl = workflowUrl(context);
+  const externalId = `${sourceId}:${context.runId}:${Number(process.env.GITHUB_RUN_ATTEMPT || 1)}`;
   const checks = await github.paginate(github.rest.checks.listForRef, {
     ...context.repo, ref: pr.headSha, check_name: NAME, filter: 'all', per_page: 100,
   });
   // Reuse the same source-attempt check on publisher retries. Only the Actions
   // app's checks qualify; a contributor cannot nominate another check ID.
-  const existing = checks.filter(c => c.name === NAME && c.external_id === externalId
+  const existing = checks.filter(c => c.name === NAME
+    && (c.external_id === sourceId || c.external_id?.startsWith(`${sourceId}:`))
     && c.head_sha === pr.headSha && c.app?.slug === 'github-actions').sort((a, b) => b.id - a.id)[0];
   const body = { ...context.repo, name: NAME, details_url: detailsUrl, external_id: externalId,
     status: 'in_progress', started_at: new Date().toISOString(),
     output: { title: 'Waiting for resource estimation and publication',
-      summary: 'Lean verification is being inspected. This check succeeds only after results are published.' } };
+      summary: `[Publisher workflow](${detailsUrl}). Lean verification is being inspected. This check succeeds only after results are published.` } };
   const { data: check } = existing
     ? await github.rest.checks.update({ ...body, check_run_id: existing.id })
     : await github.rest.checks.create({ ...body, head_sha: pr.headSha });
@@ -40,7 +42,7 @@ async function begin({ github, context, run, pr }) {
 async function finishCheck(github, context, state, conclusion, title, summary) {
   await github.rest.checks.update({ ...context.repo, check_run_id: state.checkId,
     status: 'completed', conclusion, completed_at: new Date().toISOString(),
-    output: { title, summary } });
+    output: { title, summary: `${summary}\n\n[Publisher workflow](${state.detailsUrl})` } });
 }
 
 function receipt(source, metadata, result) {
@@ -92,7 +94,9 @@ async function finalize({ github, context, core, outcome }) {
   const state = JSON.parse(fs.readFileSync(STATE, 'utf8'));
   // An older finally/retry cannot overwrite the check now owned by a newer run.
   const { data: check } = await github.rest.checks.get({ ...context.repo, check_run_id: state.checkId });
-  if (check.details_url !== state.detailsUrl || state.detailsUrl !== workflowUrl(context)
+  // GitHub rewrites details_url for checks created by the Actions app. Bind the
+  // owner through external_id, which GitHub preserves, not that display URL.
+  if (state.detailsUrl !== workflowUrl(context)
       || check.external_id !== state.externalId || check.head_sha !== state.pr.headSha) return;
   let closedHere = false;
   try {

@@ -145,9 +145,24 @@ for (const endpoint of ['comment', 'close']) test(`${endpoint} API failure produ
 }));
 
 test('an old finalizer cannot overwrite a newer publisher retry', () => fixture(async f => {
-  await f.begin(); f.checks[0].details_url += '-new-attempt';
+  await f.begin(); f.checks[0].external_id += '-new-attempt';
   const before = f.calls.length; await f.finish();
   assert.equal(f.calls.length, before); assert.equal(f.pr.state, 'open');
+}));
+
+test('GitHub Actions canonicalizes details_url without changing trusted check ownership', () => fixture(async f => {
+  await f.begin();
+  f.checks[0].details_url = `https://github.com/${REPO}/runs/${f.checks[0].id}`;
+  await f.finish();
+  assert.deepEqual(f.errors, []); assert.equal(f.checks[0].conclusion, 'success');
+  assert.equal(f.pr.state, 'closed');
+}));
+
+test('recovery upgrades a pending check created before publisher ownership was embedded', () => fixture(async f => {
+  await f.begin(); f.checks[0].external_id = 'forshor-publication:123:1';
+  await f.begin(); await f.finish();
+  assert.equal(f.checks.length, 1); assert.equal(f.checks[0].conclusion, 'success');
+  assert.equal(f.checks[0].external_id, `forshor-publication:123:1:456:${Number(process.env.GITHUB_RUN_ATTEMPT || 1)}`);
 }));
 
 test('mismatched trusted source or metadata cannot close the PR', () => fixture(async f => {
