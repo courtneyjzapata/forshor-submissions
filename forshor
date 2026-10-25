@@ -394,9 +394,21 @@ def submit(args):
             return watch(root, args)
         raise UserError('No table changes to submit. Edit Policy.lean first.')
     branch = git(root, 'branch', '--show-current')
-    if not branch or branch in ('main', 'submission-results'):
+    prs = []
+    new_branch = not branch or branch in ('main', 'submission-results')
+    if not new_branch:
+        # Discover before pushing: GitHub also updates the recorded head of a
+        # closed PR, but pushing there does not trigger submission verification.
+        prs = gh_json('pr', 'list', '--repo', REPO, '--head', branch, '--base', 'main',
+                      '--state', 'all', '--json', 'number,url,headRefOid,state')
+        head = git(root, 'rev-parse', 'HEAD')
+        dirty = bool(git(root, 'status', '--porcelain', '--untracked-files=all'))
+        new_branch = bool(prs) and not any(p['state'] == 'OPEN' for p in prs) and (
+            dirty or not any(p['headRefOid'] == head for p in prs))
+    if new_branch:
         branch = 'submission/' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:6]
         git(root, 'switch', '-c', branch)
+        prs = []
     git(root, 'add', '--', *paths)
     staged = run(['git', 'diff', '--cached', '--quiet'], cwd=root, check=False).returncode
     if staged:
@@ -410,8 +422,6 @@ def submit(args):
         raise UserError('Submission files changed during commit. Check again before pushing.')
     head = git(root, 'rev-parse', 'HEAD')
     network_git(root, 'push', '--set-upstream', 'origin', f'HEAD:refs/heads/{branch}')
-    prs = gh_json('pr', 'list', '--repo', REPO, '--head', branch, '--base', 'main',
-                  '--state', 'all', '--json', 'number,url,headRefOid,state')
     matching = next((pr for pr in prs if pr['headRefOid'] == head), None)
     if matching:
         number, url = matching['number'], matching['url']

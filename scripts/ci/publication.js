@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const reporting = require('./table_generation_report.js');
+const prPublication = require('./pr_publication.js');
 const REPOSITORY = 'zapatacomputing/forshor-submissions';
 const sha = value => /^[a-f0-9]{40}$/.test(value);
 
@@ -44,18 +45,12 @@ async function inspect({ github, context, core }) {
   if (!event || event.event !== 'pull_request' || event.path !== '.github/workflows/table-generation-submission.yml'
       || !Number.isSafeInteger(event.id) || !Number.isSafeInteger(event.run_attempt) || !sha(event.head_sha))
     throw new Error('Unexpected source verification workflow');
-  if (event.conclusion !== 'success') {
-    await core.summary.addHeading('Submission not accepted').addRaw(
-      `Verification concluded **${event.conclusion}**. Published results are unchanged.\n\n`
-    ).addLink('Verification details', event.html_url).write();
-    core.setOutput('process', 'false');
-    return;
-  }
   // Bind recovery to the original attempt, even after the source is rerun.
   const { data: run } = await github.rest.actions.getWorkflowRunAttempt({
     ...context.repo, run_id: event.id, attempt_number: event.run_attempt,
   });
-  if (run.event !== event.event || run.path !== event.path || run.head_sha !== event.head_sha || run.conclusion !== 'success')
+  if (run.id !== event.id || run.run_attempt !== event.run_attempt || run.event !== event.event
+      || run.path !== event.path || run.head_sha !== event.head_sha || run.conclusion !== event.conclusion)
     throw new Error('Source workflow identity changed');
   let pr;
   try {
@@ -63,6 +58,16 @@ async function inspect({ github, context, core }) {
   } catch (error) {
     if (error.code !== 'SUPERSEDED') throw error;
     await core.summary.addHeading('Superseded submission').addRaw('The PR now has a newer commit. This old result will not be archived or published.').write();
+    core.setOutput('process', 'false');
+    return;
+  }
+  fs.writeFileSync('publication-source.json', JSON.stringify({ run, pr }));
+  core.setOutput('report', 'true');
+  await prPublication.begin({ github, context, run, pr });
+  if (run.conclusion !== 'success') {
+    await core.summary.addHeading('Submission not accepted').addRaw(
+      `Verification concluded **${run.conclusion}**. Published results are unchanged.\n\n`
+    ).addLink('Verification details', run.html_url).write();
     core.setOutput('process', 'false');
     return;
   }
@@ -77,7 +82,6 @@ async function inspect({ github, context, core }) {
     const available = data.artifacts.filter(a => !a.expired && a.name.startsWith(`table-generation-submission-${run.id}-`));
     artifact = available.find(a => a.name === artifact)?.name || available[0]?.name || artifact;
   }
-  fs.writeFileSync('publication-source.json', JSON.stringify({ run, pr }));
   core.setOutput('process', 'true');
   core.setOutput('download', receipt ? 'false' : 'true');
   core.setOutput('artifact', artifact);

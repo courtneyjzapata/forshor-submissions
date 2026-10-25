@@ -6,7 +6,7 @@ on:
 permissions: {}
 jobs:
   publish:
-    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion != 'cancelled'
+    if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # One publisher at a time; do not drop intermediate accepted submissions.
@@ -17,7 +17,8 @@ jobs:
     permissions:
       contents: write
       actions: read
-      pull-requests: read
+      pull-requests: write
+      checks: write
       id-token: write
     env:
       SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
@@ -33,6 +34,7 @@ jobs:
         run: |
           node scripts/test_report_trust.js
           node --test scripts/test_publication.js
+          node --test scripts/test_pr_publication.js
           python3 -m unittest discover -s scripts/ci -p 'test_*.py'
       - name: Inspect the exact source attempt
         id: source
@@ -91,6 +93,16 @@ jobs:
           PUBLISHER_TOKEN: ${{ steps.google.outputs.id_token }}
           GH_TOKEN: ${{ github.token }}
         run: python evaluation/publish.py
+      - name: Report publication on the PR and close accepted submissions
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          PUBLICATION_OUTCOME: ${{ job.status }}
+        with:
+          script: |
+            await require('./scripts/ci/pr_publication.js').finalize({
+              github, context, core, outcome: process.env.PUBLICATION_OUTCOME,
+            });
       - name: Explain recovery after a failure
         if: failure()
         run: |
@@ -98,7 +110,7 @@ jobs:
           echo '## Recovery' >> "$GITHUB_STEP_SUMMARY"
           echo 'Rerun this publication workflow (or its failed job). The source run and attempt stay fixed, accepted verification is reused, and an already completed publication becomes a no-op.' >> "$GITHUB_STEP_SUMMARY"
       - name: Retain publication diagnostics without credentials
-        if: always() && steps.source.outputs.process == 'true'
+        if: always() && steps.source.outputs.report == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: publication-${{ github.run_id }}-${{ github.run_attempt }}
@@ -106,4 +118,5 @@ jobs:
             publication-source.json
             evaluation-metadata.json
             publication-result.json
+            publication-check.json
           retention-days: 14

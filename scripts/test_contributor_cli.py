@@ -137,6 +137,58 @@ class WorkingFiles(unittest.TestCase):
                 with cli.repository_lock(self.root):
                     self.fail('A second command entered the checker')
 
+    def closed_pr_iteration(self, edit):
+        git(self.root, 'switch', '-c', 'submission/accepted')
+        (self.root / cli.POLICY).write_text('accepted table\n')
+        git(self.root, 'add', cli.POLICY)
+        git(self.root, 'commit', '-m', 'accepted table')
+        accepted_head = git(self.root, 'rev-parse', 'HEAD')
+        if edit:
+            (self.root / cli.POLICY).write_text('next table\n')
+            if edit == 'committed':
+                git(self.root, 'add', cli.POLICY)
+                git(self.root, 'commit', '-m', 'next table')
+        cli.write_state(self.root, {'checked': {'base': self.base, 'digest': cli.fingerprint(self.root, self.base)}})
+        pr = {'number': 12, 'url': 'https://github.com/example/pull/12', 'headRefOid': accepted_head, 'state': 'CLOSED'}
+        def details(_):
+            return {'state': 'closed' if not edit else 'open',
+                    'head': {'sha': git(self.root, 'rev-parse', 'HEAD'), 'repo': {'full_name': cli.REPO}},
+                    'base': {'ref': 'main', 'repo': {'full_name': cli.REPO}}}
+        original_run = cli.run
+        creations = []
+        def run(args, **kwargs):
+            if args[:3] == ['gh', 'pr', 'create']:
+                creations.append(args)
+                return SimpleNamespace(stdout='https://github.com/example/pull/13\n')
+            return original_run(args, **kwargs)
+        def github(*args):
+            return {'login': 'test', 'id': 1} if args == ('api', 'user') else [pr]
+        args = argparse.Namespace(watch=False, json=False, timeout=1, title='test')
+        with patch.object(cli, 'authenticate'), patch.object(cli, 'repository', return_value=self.root), \
+                patch.object(cli, 'refresh_base', return_value=self.base), \
+                patch.object(cli, 'gh_json', side_effect=github), patch.object(cli, 'run', side_effect=run), \
+                patch.object(cli, 'api', side_effect=details), patch.object(cli, 'network_git') as push, \
+                patch.object(cli, 'watch'), patch.object(cli, 'check') as check:
+            cli.submit(args)
+            check.assert_not_called()
+        submission = cli.read_state(self.root)['submission']
+        self.assertEqual(submission['pr'], 13 if edit else 12)
+        self.assertEqual(len(creations), 1 if edit else 0)
+        if edit:
+            self.assertNotEqual(submission['branch'], 'submission/accepted')
+            self.assertNotIn('HEAD:refs/heads/submission/accepted', push.call_args.args)
+        else:
+            self.assertEqual(submission['branch'], 'submission/accepted')
+
+    def test_new_working_table_after_closed_pr_creates_new_branch_and_pr(self):
+        self.closed_pr_iteration('working')
+
+    def test_new_committed_table_after_closed_pr_creates_new_branch_and_pr(self):
+        self.closed_pr_iteration('committed')
+
+    def test_unchanged_accepted_submission_reuses_closed_pr_for_status(self):
+        self.closed_pr_iteration(None)
+
 
 class PublicationIdentity(unittest.TestCase):
     def setUp(self):

@@ -44,11 +44,20 @@ estimates for hosted Qualtran evaluation.
 it first creates a submission branch. It never force-pushes, merges a PR, or adds
 unrelated files. Existing open PRs on the branch are reused. Source changes while
 verification/commit is running cause an error before publication is claimed.
+After an accepted PR closes, editing the table and running `submit` creates a
+fresh submission branch and PR. Running it again without edits follows the
+existing accepted submission instead.
 
 ## Publication and recovery
 
 There are two hosted workflows: Verify Table Generation, then Publish Verified
 Results. The publisher's Git head points to main, not the submitted commit.
+Both report checks on your PR: **Verifier**, then **Qualtran estimation and
+publication**. If Lean fails, the second check is skipped and the PR stays open.
+When Google confirms publication, the publisher posts links to the accepted
+table and staging dashboard, then closes the PR without merging it. A failed
+estimation, publication, or final reporting step keeps the second check red;
+rerun the publisher to recover. A newer commit cannot be closed by an old result.
 The CLI therefore matches trusted publication diagnostics against the exact
 verifier run ID, attempt, PR number, and submitted SHA. An unrelated success or
 a successful job without a publication receipt is never reported as your result.

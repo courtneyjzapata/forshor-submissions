@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const reporting = require('./ci/table_generation_report.js');
 const publication = require('./ci/publication.js');
+const lifecycle = require('./ci/pr_publication.js');
 const HEAD = 'a'.repeat(40);
 const context = { repo: { owner: 'zapatacomputing', repo: 'forshor-submissions' } };
 
@@ -123,14 +124,22 @@ test('an old run for a PR that has moved is explicitly superseded', async () => 
     error => error.code === 'SUPERSEDED');
 });
 
-test('verification failure produces a visible outcome without archiving or publishing', async () => {
+test('verification failure produces a visible outcome without archiving or publishing', async t => {
   const output = {}, messages = [];
   const summary = { addHeading(x) { messages.push(x); return this; }, addRaw(x) { messages.push(x); return this; },
     addLink() { return this; }, async write() {} };
-  await publication.inspect({ github: {}, core: { summary, setOutput(k, v) { output[k] = v; } }, context: {
-    ...context, payload: { workflow_run: { event: 'pull_request', path: '.github/workflows/table-generation-submission.yml',
-      id: 123, run_attempt: 1, head_sha: HEAD, conclusion: 'failure', html_url: 'https://github.com/run' } },
-  } });
+  const event = { event: 'pull_request', path: '.github/workflows/table-generation-submission.yml',
+    id: 123, run_attempt: 1, head_sha: HEAD, conclusion: 'failure', html_url: 'https://github.com/run' };
+  t.mock.method(fs, 'writeFileSync', () => {});
+  const begin = t.mock.method(lifecycle, 'begin', async () => {});
+  const github = { paginate: async (method, params) => method(params), rest: {
+    actions: { getWorkflowRunAttempt: async () => ({ data: event }) },
+    repos: { listPullRequestsAssociatedWithCommit: async () => [{ number: 1, base: { ref: 'main' }, head: { sha: HEAD } }] },
+    pulls: { listFiles: async () => [{ filename: 'TableGeneration/Submission/Policy.lean' }] },
+  } };
+  await publication.inspect({ github, core: { summary, setOutput(k, v) { output[k] = v; } },
+    context: { ...context, payload: { workflow_run: event } } });
+  assert.equal(begin.mock.callCount(), 1, 'failed verification still attaches a trusted PR check');
   assert.equal(output.process, 'false');
   assert.match(messages.join(' '), /Published results are unchanged/);
 });
@@ -155,6 +164,7 @@ test('accepted verification recovers after the original run artifact disappears'
     path: '.github/workflows/table-generation-submission.yml', head_sha: HEAD };
   const output = {};
   t.mock.method(fs, 'writeFileSync', () => {});
+  t.mock.method(lifecycle, 'begin', async () => {});
   const github = { paginate: async (method, params) => method(params), rest: {
     actions: {
       getWorkflowRunAttempt: async () => ({ data: event }),
