@@ -1,15 +1,10 @@
 import TableGeneration.Policy
+import TableGeneration.Submission.Policy.GeneralParity
 
 namespace TableGeneration.Submission.Policy
 
-/-!
-This is the editable submission entry point. Replace `implementation` with a
-`GeneratorPolicy` for the targets handled by the submission; helper files may be
-added as needed.
--/
-
-/-- Replace this empty policy with the submitted implementation. -/
+/-- The general parity policy: handles every `k` for which its checks pass. -/
 def implementation : TableGeneration.GeneratorPolicy :=
-  .empty
+  GeneralParity.implementation
 
 end TableGeneration.Submission.Policy
