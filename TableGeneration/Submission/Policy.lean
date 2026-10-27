@@ -13,3 +13,4 @@ def implementation : TableGeneration.GeneratorPolicy :=
   .empty
 
 end TableGeneration.Submission.Policy
+-- empty-policy test
