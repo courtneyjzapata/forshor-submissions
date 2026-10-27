@@ -1,0 +1,2 @@
+namespace TableGeneration.Submission
+end TableGeneration.Submission
