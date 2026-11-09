@@ -59,6 +59,32 @@ def cache_keys(root):
             "forshor_hash": hashlib.sha256(json.dumps([config["forshor"], config["forshor_build"]], sort_keys=True).encode()).hexdigest()}
 
 
+def share_matching_dependencies(root, forshor):
+    """Reuse only dependencies whose trusted manifests pin identical sources."""
+    source_manifest = json.loads((forshor / "lake-manifest.json").read_text())
+    destination_manifest = json.loads((root / "lake-manifest.json").read_text())
+    source_packages = {p["name"]: p for p in source_manifest["packages"]}
+    identity = ("type", "url", "rev", "subDir", "configFile", "manifestFile")
+    for package in destination_manifest["packages"]:
+        name = package["name"]
+        other = source_packages.get(name)
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or package.get("type") != "git" or not other:
+            continue
+        if not package.get("rev") or any(package.get(k) != other.get(k) for k in identity):
+            continue
+        source = forshor / ".lake/packages" / name
+        destination = root / ".lake/packages" / name
+        if not source.is_dir():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.is_symlink():
+            destination.unlink()
+        elif destination.exists():
+            shutil.rmtree(destination)
+        destination.symlink_to(os.path.relpath(source, destination.parent), target_is_directory=True)
+        print(f"Sharing identically pinned dependency: {name}", flush=True)
+
+
 def build(root, forshor, log):
     config = configuration(root)
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=forshor, text=True).strip()
@@ -69,6 +95,8 @@ def build(root, forshor, log):
     timings = []
     try:
         for name, path, targets in (("ForShor", forshor, config["forshor_build"]), ("STO", root, config["sto_build"])):
+            if name == "STO":
+                share_matching_dependencies(root, forshor)
             roots = FORSHOR_ROOTS if name == "ForShor" else targets
             for stage, cmd in (("dependencies", ["lake", "exe", "cache", "get", *roots]), ("build", ["lake", "build", *targets])):
                 start = time.monotonic()

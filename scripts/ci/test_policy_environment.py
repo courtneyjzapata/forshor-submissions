@@ -8,7 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from policy_environment import configuration, build, run_with_disk_budget, FORSHOR_ROOTS
+from policy_environment import configuration, build, run_with_disk_budget, share_matching_dependencies, FORSHOR_ROOTS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -54,6 +54,7 @@ class PolicyEnvironmentTests(unittest.TestCase):
         config = configuration(ROOT)
         with tempfile.TemporaryDirectory() as directory, \
              patch('policy_environment.subprocess.check_output', return_value=config['forshor']['ref']), \
+             patch('policy_environment.share_matching_dependencies'), \
              patch('policy_environment.run_with_disk_budget') as run:
             log = Path(directory) / 'bootstrap.json'
             build(ROOT, Path(directory), log)
@@ -75,3 +76,23 @@ class PolicyEnvironmentTests(unittest.TestCase):
             self.assertEqual(len(stages), 1)
             self.assertFalse(stages[0]['success'])
             self.assertIn('diskFreeGiB', stages[0])
+
+    def test_dependencies_are_shared_only_for_identical_trusted_pins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, destination = Path(directory) / 'forshor', Path(directory) / 'sto'
+            common = {'name': 'mathlib', 'type': 'git', 'url': 'https://example/mathlib', 'rev': 'a' * 40}
+            different = {**common, 'name': 'different'}
+            for root, packages in [(source, [common, different]), (destination, [common, {**different, 'rev': 'b' * 40}])]:
+                root.mkdir()
+                (root / 'lake-manifest.json').write_text(json.dumps({'packages': packages}))
+                for package in packages:
+                    (root / '.lake/packages' / package['name']).mkdir(parents=True)
+            share_matching_dependencies(destination, source)
+            shared = destination / '.lake/packages/mathlib'
+            self.assertTrue(shared.is_symlink())
+            self.assertFalse(shared.readlink().is_absolute())
+            self.assertEqual(shared.resolve(), (source / '.lake/packages/mathlib').resolve())
+            self.assertFalse((destination / '.lake/packages/different').is_symlink())
+            # Restored relative links remain safe to prepare again.
+            share_matching_dependencies(destination, source)
+            self.assertTrue(shared.is_dir())
