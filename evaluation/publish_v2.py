@@ -1,7 +1,7 @@
 """Recoverable publication of one evaluated policy to the contract-v2 publisher (`/v2/state`, `/v2/publish`).
 
 Same shape as `publish.py` (v1, untouched): read state, skip work already done, price once, send, and on a conflict or transport
-error re-read state and send again. Never runs submitted Lean. Not wired into any workflow.
+error re-read state and send again. Never runs submitted Lean. The trusted workflow calls this recovery loop through `intake_v2.py --publish-from`.
 
 What is different from v1:
 * The request is priced ONCE. A retry only refreshes the three things that depend on the live state: `baseGeneration`,

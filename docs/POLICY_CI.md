@@ -35,3 +35,31 @@ Tracking: [QP-436](https://linear.app/zapata-quantum/issue/QP-436), [QP-437](htt
 The fallback VM has 8 vCPUs, 32 GiB RAM, a 100 GiB boot disk, no Google service account, and an administrative SSH rule restricted to Google IAP. Its runner registration is ephemeral, and the VM is configured to delete itself after at most two hours. Delete the VM immediately after its job, then remove its IAP firewall rule, dedicated subnet, and network. The workflow has a separate concurrency group so the original hosted bootstrap can complete independently; cancel the remaining bootstrap once one has saved both caches.
 
 The temporary bootstrap uses four Lean threads and preserves trusted local `.lake` files when retrying an interrupted build. PR verification keeps one thread and clean checkouts. Both trees share the one compiled Mathlib download by matching their pinned manifests.
+
+## Hosted results: November 9, 2026
+
+Both supplied starter policies passed the CLI and both GitHub checks, were archived byte-for-byte, and were closed without merging:
+
+* PhaseProduct: [PR #52](https://github.com/zapatacomputing/forshor-submissions/pull/52), head `de4a5a9935e2cd3605c9f6ca2df3b1e6418142fc`, published as `davidleocadio94_sub1` on PP/full.
+* PhaseTripleProduct: [PR #53](https://github.com/zapatacomputing/forshor-submissions/pull/53), head `a18ffa70b4a8a74b0f173a66873f2c0b1b0451a9`, published as `davidleocadio94_sub2` on PTP.
+
+Active epoch: `7a11b2b8b6d68718`. Two-submission snapshot: `9eb7cb213b599a33765e0b619ac9294af8858aa0f20a2db01c3420314d367925`.
+
+The browser passed all 12 board/budget views, both submissions' details, refresh, desktop, and 390px mobile without page errors or horizontal overflow. Both queued submissions were retained. [PR #54](https://github.com/zapatacomputing/forshor-submissions/pull/54) passed structural preflight but failed the deliberately false Lean proof; publication was skipped. Re-running [PP publication](https://github.com/zapatacomputing/forshor-submissions/actions/runs/42716235736) succeeded without changing the snapshot or adding another submission. The ledger still has two completed evaluations and the next participant number is 3. v1 data is unchanged; all five reviewer logins work and anonymous access remains blocked.
+
+### Measured compute
+
+These are measured starter examples on the standard private Ubuntu x64 runner, using trusted caches and one Lean thread. They are not a bound for every k ≤ 8 policy.
+
+| Example | Verification | Publication | Rounded job minutes | Gross CI estimate |
+| --- | --- | --- | --- | --- |
+| PP, one k=3 band | 9m 54s | 53s | 10 + 1 | $0.066 |
+| PTP, one k=4 band | 9m 15s | 64s | 10 + 2 | $0.072 |
+
+Calculated at [GitHub's Linux x64 rate](https://docs.github.com/en/billing/reference/actions-runner-pricing) of $0.006/minute, rounding each job separately. Queue time and the custom publication check consume no extra runner minutes. Estimates precede the organization's included usage, and exclude failed submissions, retries, storage, and one-off bootstrap/debug work. For a similar workload, 1,000 accepted policies imply about $66–72 gross CI compute. The private sprint currently runs one verifier at a time (roughly six of these verifications per hour); production concurrency is a separate setting.
+
+The corrected cold bootstrap took 17m 44s on the temporary 8-vCPU/32-GiB VM with four threads. Warm checker preparation on the first ordinary runner spent 34s fetching/checking dependencies and 10s building ForShor, then 6s/4s for STO; restoring the cache and preparing the runner add time. The temporary VM, IAP rule, subnet, network, and task SSH key were removed. [Self-hosted GitHub compute is free](https://docs.github.com/en/billing/concepts/product-billing/github-actions); that temporary VM's Google charge is separate from the per-submission estimate.
+
+### Public-release boundaries
+
+The tested flow uses collaborators' branches in the company repository. The CLI currently requires that repository as both the base and head, so public fork submissions need a separate integration change. The v2 contract caps each board and the submission index at 2,000 rows; paginate before scaling beyond those caps. These constraints concern submission volume, independently of visitor traffic receiving shared JSON.

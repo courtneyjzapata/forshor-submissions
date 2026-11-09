@@ -83,5 +83,5 @@ Every accepted policy is archived on the `submission-results` branch, by the sam
 * The job needs `contents: write` on `submission-results` (the checkout must keep an `origin` it can push to; the token goes only into git's per-call environment, as `publish.refresh_archive` does). Branch protection on `submission-results` must allow that identity to push. Not exercised against GitHub: the tests push to a local bare repository, and the contents API is stubbed (a fork PR's head commit should resolve in the base repository, which is what the check relies on).
 * The CLI's receipt links to the results page; it carries the archive path and commit in `publication-result.json` under `archive`.
 
-Not done: the publish job's branch for `kind: policy` in the workflow YAML and in `scripts/ci/publication.js` (including the checkout of `submission-results` that `--archive` needs).
+Hosted integration is active. See `docs/POLICY_CI.md` for the workflow, runner/cache configuration, and November 9 hosted PP/PTP verification, archive, publication, rejection, and retry evidence.
 

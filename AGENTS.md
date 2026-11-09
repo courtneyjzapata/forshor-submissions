@@ -5,6 +5,19 @@ contract whose proofs are the acceptance test, a Python verifier and scoring
 pipeline, an archive of accepted policies composed into a best-known generator,
 and a recursive gate-count planner over the accepted `PhaseProduct` tables.
 
+## Complete-policy submissions (current website)
+
+A file declaring `namespace PolicySubmission` or `namespace PTPPolicySubmission`
+uses the v2 complete-policy route. Only `TableGeneration/Submission/Policy.lean`
+may change. Both modes receive Lean/exact-width verification and resource pricing;
+PhaseProduct enters the PP and full boards, and PhaseTripleProduct enters PTP.
+Use `docs/POLICY_CI.md` and `evaluation/INTAKE_FOR_CI.md` for this route.
+
+The generator-policy guidance below describes the retained legacy route
+(`namespace TableGeneration.Submission.Policy`), including its older planner and
+scoring rules. Its statement that PTP has no gate model applies to that legacy
+planner, rather than the v2 policy engine.
+
 ## Code Boundaries
 
 - The protected set is `PROTECTED_FILES` in `scripts/verifier.py`, which is
