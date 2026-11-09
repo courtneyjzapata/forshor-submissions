@@ -4,6 +4,9 @@ inputs:
   save-cache:
     description: Only the trusted main cache warmer sets this to true
     default: 'false'
+  preserve-builds:
+    description: Only the trusted temporary bootstrap may preserve local build files on retry
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -19,6 +22,7 @@ runs:
         repository: VerifiedQC/ForShor
         ref: ${{ steps.config.outputs.forshor_ref }}
         path: policy-forshor
+        clean: ${{ inputs.preserve-builds != 'true' }}
         persist-credentials: false
     - id: forshor
       uses: actions/cache/restore@v4

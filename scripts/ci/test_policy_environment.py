@@ -8,7 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from policy_environment import configuration, build, run_with_disk_budget, share_matching_dependencies, FORSHOR_ROOTS
+from policy_environment import configuration, build, run_with_disk_budget, share_matching_dependencies
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -50,19 +50,48 @@ class PolicyEnvironmentTests(unittest.TestCase):
                 run_with_disk_budget(['lake', 'build'], ROOT, {})
         self.assertEqual(failure.exception.returncode, 7)
 
-    def test_targeted_fetch_suppresses_automatic_full_mathlib_download(self):
+    def test_mathlib_fetch_uses_a_cache_supported_root(self):
         config = configuration(ROOT)
         with tempfile.TemporaryDirectory() as directory, \
              patch('policy_environment.subprocess.check_output', return_value=config['forshor']['ref']), \
              patch('policy_environment.share_matching_dependencies'), \
+             patch('policy_environment.verify_mathlib_cache'), \
              patch('policy_environment.run_with_disk_budget') as run:
             log = Path(directory) / 'bootstrap.json'
             build(ROOT, Path(directory), log)
             calls = run.call_args_list
-            self.assertEqual(calls[0].args[0], ['lake', 'exe', 'cache', 'get', *FORSHOR_ROOTS])
-            self.assertEqual(calls[2].args[0], ['lake', 'exe', 'cache', 'get', *config['sto_build']])
+            self.assertEqual(calls[0].args[0], ['lake', 'exe', 'cache', 'get', 'Mathlib'])
+            self.assertEqual(calls[2].args[0], ['lake', 'exe', 'cache', 'get', 'Mathlib'])
             self.assertTrue(all(c.args[2]['MATHLIB_NO_CACHE_ON_UPDATE'] == '1' for c in calls))
             self.assertEqual(len(json.loads(log.read_text())), 4)
+
+    def test_larger_bootstrap_can_use_more_threads(self):
+        config = configuration(ROOT)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('policy_environment.subprocess.check_output', return_value=config['forshor']['ref']), \
+             patch('policy_environment.share_matching_dependencies'), \
+             patch('policy_environment.verify_mathlib_cache'), \
+             patch.dict('os.environ', {'POLICY_BOOTSTRAP_THREADS': '4'}), \
+             patch('policy_environment.run_with_disk_budget') as run:
+            build(ROOT, Path(directory), Path(directory) / 'bootstrap.json')
+            self.assertTrue(all(c.args[2]['LEAN_NUM_THREADS'] == '4' for c in run.call_args_list))
+
+    def test_missing_compiled_cache_cannot_fall_back_to_a_long_source_build(self):
+        config = configuration(ROOT)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('policy_environment.subprocess.check_output', return_value=config['forshor']['ref']), \
+             patch('policy_environment.run_with_disk_budget') as run:
+            with self.assertRaisesRegex(RuntimeError, 'refusing to rebuild Mathlib'):
+                build(ROOT, Path(directory), Path(directory) / 'bootstrap.json')
+            self.assertEqual(len(run.call_args_list), 1)
+            self.assertEqual(run.call_args.args[0], ['lake', 'exe', 'cache', 'get', 'Mathlib'])
+
+    def test_unbounded_bootstrap_parallelism_is_rejected(self):
+        config = configuration(ROOT)
+        with patch('policy_environment.subprocess.check_output', return_value=config['forshor']['ref']), \
+             patch.dict('os.environ', {'POLICY_BOOTSTRAP_THREADS': '64'}):
+            with self.assertRaisesRegex(ValueError, 'threads'):
+                build(ROOT, Path('/tmp'), Path('/tmp/unused-policy-log.json'))
 
     def test_failed_stage_still_writes_timing_and_disk_diagnostics(self):
         config = configuration(ROOT)

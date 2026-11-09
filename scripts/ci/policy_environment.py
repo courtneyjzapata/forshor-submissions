@@ -13,14 +13,6 @@ import signal
 import subprocess
 import time
 
-FORSHOR_ROOTS = [
-    "ForShor.ShorVerification.Submission.PolicyCheck",
-    "ForShor.ShorVerification.Submission.PolicyMain",
-    "ForShor.ShorVerification.Submission.PTPPolicyCheck",
-    "ForShor.ShorVerification.Submission.PTPPolicyMain",
-]
-
-
 def run_with_disk_budget(command, path, environment):
     process = subprocess.Popen(command, cwd=path, env=environment, start_new_session=True)
     while process.poll() is None:
@@ -85,25 +77,37 @@ def share_matching_dependencies(root, forshor):
         print(f"Sharing identically pinned dependency: {name}", flush=True)
 
 
+def verify_mathlib_cache(root):
+    artifact = root / ".lake/packages/mathlib/.lake/build/lib/lean/Mathlib/Tactic.olean"
+    if not artifact.is_file():
+        raise RuntimeError("Compiled Mathlib cache is missing; refusing to rebuild Mathlib from source")
+
+
 def build(root, forshor, log):
     config = configuration(root)
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=forshor, text=True).strip()
     if actual != config["forshor"]["ref"]:
         raise ValueError("ForShor checkout does not match the trusted pin")
-    environment = {**os.environ, "LEAN_NUM_THREADS": "1", "MATHLIB_NO_CACHE_ON_UPDATE": "1"}
+    threads = int(os.environ.get("POLICY_BOOTSTRAP_THREADS", "1"))
+    if not 1 <= threads <= 8:
+        raise ValueError("Policy bootstrap threads must be between 1 and 8")
+    environment = {**os.environ, "LEAN_NUM_THREADS": str(threads), "MATHLIB_NO_CACHE_ON_UPDATE": "1"}
     environment.pop("ELAN_TOOLCHAIN", None)
     timings = []
     try:
         for name, path, targets in (("ForShor", forshor, config["forshor_build"]), ("STO", root, config["sto_build"])):
             if name == "STO":
                 share_matching_dependencies(root, forshor)
-            roots = FORSHOR_ROOTS if name == "ForShor" else targets
-            for stage, cmd in (("dependencies", ["lake", "exe", "cache", "get", *roots]), ("build", ["lake", "build", *targets])):
+            # The Mathlib cache tool does not traverse a downstream project's
+            # roots. Request Mathlib itself; both trees share this one download.
+            for stage, cmd in (("dependencies", ["lake", "exe", "cache", "get", "Mathlib"]), ("build", ["lake", "build", *targets])):
                 start = time.monotonic()
                 print(f"::group::{name} {stage}", flush=True)
                 passed = False
                 try:
                     run_with_disk_budget(cmd, path, environment)
+                    if stage == "dependencies":
+                        verify_mathlib_cache(path)
                     passed = True
                 finally:
                     print("::endgroup::", flush=True)
