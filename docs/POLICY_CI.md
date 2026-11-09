@@ -27,3 +27,9 @@ The policy archive is separate from the older `leaderboard/results.json` index. 
 First warm the policy environments on `main`. Open a PR containing only the supplied `seed_pp_S707dd51bf951.Policy.lean` as `TableGeneration/Submission/Policy.lean`. Confirm both PR checks, archived source and evidence, CLI status, and the PhaseProduct/full-board rows. Repeat with the supplied PhaseTripleProduct example. A published row remains in the ledger, so use a deliberate test handle. Test failed verification and publisher retry without replacing the valid snapshot.
 
 Tracking: [QP-436](https://linear.app/zapata-quantum/issue/QP-436), [QP-437](https://linear.app/zapata-quantum/issue/QP-437).
+
+## Temporary cold-build fallback
+
+`Temporary policy cache bootstrap` is manual-only and checks out trusted `main`. It uses the one-job `forshor-bootstrap-20261109` Linux/x64 runner to create the same cache keys as standard hosted verification. It cannot publish results. Ordinary PR verification continues on `ubuntu-24.04`; no repository runner variable changes.
+
+The fallback VM has 8 vCPUs, 32 GiB RAM, a 100 GiB boot disk, no Google service account, and no inbound firewall rules. Its runner registration is ephemeral, and the VM is configured to delete itself after at most two hours. Delete the VM immediately after its job, then remove its dedicated subnet and network. The workflow has a separate concurrency group so the original hosted bootstrap can complete independently; cancel the remaining bootstrap once one has saved both caches.

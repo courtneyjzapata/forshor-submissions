@@ -1,0 +1,35 @@
+name: Temporary policy cache bootstrap
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: forshor-policy-bootstrap-backup
+  cancel-in-progress: false
+jobs:
+  warm:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, forshor-bootstrap-20261109]
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: verifier
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the trusted Lean toolchain
+        working-directory: verifier
+        run: bash scripts/ci/install_lean.sh
+      - uses: ./verifier/.github/actions/policy-engine-environment
+        with:
+          source: verifier
+          save-cache: 'true'
+      - uses: ./verifier/.github/actions/policy-lean-environment
+        with:
+          save-cache: 'true'
+      - name: Retain resource timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: policy-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: policy-bootstrap.json
