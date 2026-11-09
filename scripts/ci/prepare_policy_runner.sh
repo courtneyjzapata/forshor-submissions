@@ -11,7 +11,7 @@ df -h "$RUNNER_TEMP"
 sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
 swapfile="$RUNNER_TEMP/forshor-policy.swap"
 if [ ! -e "$swapfile" ]; then
-  sudo fallocate -l 16G "$swapfile"
+  sudo fallocate -l 8G "$swapfile"
   sudo chmod 600 "$swapfile"
   sudo mkswap "$swapfile"
   sudo swapon "$swapfile"

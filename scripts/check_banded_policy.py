@@ -12,8 +12,8 @@ Stages (each timed; the first failure stops the run and is recorded):
            ever compiled, so there is no lexical gate to run):
              .../Instances/Submitted.lean      bands + policy (defs of literals)
              .../Instances/SubmittedCert.lean  accepted / correct / chain_contracts
-  stage    copy-on-write clone of this project (cp -c, keeps .lake), unless
-           --in-place
+  stage    isolated project copy, reusing dependency artifacts (copy-on-write on
+           macOS, shared dependency directory on Linux), unless --in-place
   data     lake build ...Instances.Submitted
   report   lake env lean --run scripts/BandedPolicyReport.lean -- N
            (evaluation tier: ladder, per-band check and child width; used for
@@ -236,8 +236,8 @@ def main(argv=None) -> int:
             if work.exists():
                 shutil.rmtree(work)
             t0 = time.monotonic()
-            copy = ["cp", "-cR"] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto"]
-            subprocess.run(copy + [str(ROOT), str(work)], check=True)
+            from tree_copy import copy_lean_tree
+            copy_lean_tree(ROOT, work)
             rec["seconds"]["stage"] = round(time.monotonic() - t0, 2)
         rec["workdir"] = str(work)
         (work / INST).mkdir(parents=True, exist_ok=True)

@@ -141,7 +141,9 @@ def forshor_build(forshor_tree: Path, template: str, workdir: Path, timeout: int
     tree = workdir / "forshor-tree"
     if tree.exists():
         shutil.rmtree(tree)
-    subprocess.run((["cp", "-Rc"] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto"]) + [str(forshor_tree), str(tree)], check=True)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from tree_copy import copy_lean_tree
+    copy_lean_tree(forshor_tree, tree)
     target = tree / "ForShor" / "ShorVerification" / "Submission" / filename
     if not target.parent.is_dir() or (kind == "ptp" and not (target.parent / "PTPPolicyCheck.lean").exists()):
         raise RuntimeError(f"the ForShor checkout has no {'PhaseTripleProduct' if kind == 'ptp' else 'policy'} submission files (it needs ForShor's PTPPolicyCheck and PTPPolicyMain)")

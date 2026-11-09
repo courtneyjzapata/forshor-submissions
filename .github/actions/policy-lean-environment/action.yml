@@ -24,12 +24,12 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: policy-forshor/.lake
-        key: policy-forshor-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.config.outputs.forshor_hash }}
+        key: policy-forshor-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.config.outputs.forshor_hash }}
     - id: sto
       uses: actions/cache/restore@v4
       with:
         path: verifier/.lake
-        key: policy-sto-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.config.outputs.sto_hash }}
+        key: policy-sto-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.config.outputs.sto_hash }}
     - name: Build both trusted checkers
       shell: bash
       run: python3 verifier/scripts/ci/policy_environment.py build
