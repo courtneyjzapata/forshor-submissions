@@ -51,6 +51,13 @@ function receipt(source, metadata, result) {
   if (metadata.repository !== REPOSITORY || metadata.headSha !== source.pr.headSha
       || metadata.pullRequestUrl !== expectedPr || !/^[1-9][0-9]*$/.test(metadata.runId)
       || !digest(metadata.evaluationKey)) throw new Error('Publication metadata does not match the verified PR');
+  if (metadata.kind === 'policy') {
+    if (result.schema !== 'forshor.publication/v2' || result.kind !== 'policy'
+        || result.policy?.headSha !== metadata.headSha || result.policy?.login !== metadata.githubLogin
+        || result.policy?.pull !== source.pr.number || result.policy?.digest !== metadata.policyDigest
+        || !digest(metadata.policyDigest) || !/^[a-f0-9]{16}$/.test(metadata.epoch))
+      throw new Error('Policy publication receipt does not match the verified policy');
+  }
   // Reused evaluations refer to the original trusted verifier run. The archive,
   // not a submitted receipt, supplies that identity (publication.archive).
   if (result.alreadyPublished === true && result.evaluationKey !== undefined) {
@@ -71,17 +78,19 @@ function sameHead(pr, state) {
     && pr.base?.repo?.full_name === REPOSITORY && !pr.merged;
 }
 
-async function comment(github, context, state, result) {
+async function comment(github, context, state, result, metadata) {
   const marker = `<!-- forshor-publication:${state.pr.headSha} -->`;
   const verification = `https://github.com/${REPOSITORY}/actions/runs/${state.run.id}/attempts/${state.run.attempt}`;
-  const archive = `https://github.com/${REPOSITORY}/tree/submission-results/results/policies/${state.pr.headSha}`;
-  const snapshot = result.snapshotId ? `\nSnapshot: [\`${result.snapshotId.slice(0, 12)}\`](${DASHBOARD}/results/snapshots/${result.snapshotId}/dashboard.json).` : '';
+  const isPolicy = metadata.kind === 'policy';
+  const archive = `https://github.com/${REPOSITORY}/tree/submission-results/results/${isPolicy ? 'policy-submissions' : 'policies'}/${state.pr.headSha}`;
+  const snapshotPath = isPolicy ? `/results/v2/e/${metadata.epoch}/s/${result.snapshotId}/dashboard.json` : `/results/snapshots/${result.snapshotId}/dashboard.json`;
+  const snapshot = result.snapshotId ? `\nSnapshot: [\`${result.snapshotId.slice(0, 12)}\`](${DASHBOARD}${snapshotPath}).` : '';
   const body = `${marker}\n### Submission accepted and published\n\n`
     + `Lean verification passed and Google confirmed publication for commit \`${state.pr.headSha}\`.\n\n`
-    + `[Lean verification](${verification}) · [Qualtran and publication](${state.detailsUrl}) · [Archived table](${archive}) · [Staging dashboard](${DASHBOARD})${snapshot}\n\n`
-    + 'Refresh the dashboard to see the latest results. A valid table need not change the winning plan. '
+    + `[Lean verification](${verification}) · [Qualtran and publication](${state.detailsUrl}) · [Archived ${isPolicy ? 'policy' : 'table'}](${archive}) · [Staging dashboard](${DASHBOARD})${snapshot}\n\n`
+    + (isPolicy ? `Refresh the dashboard to see ${result.name ? `\`${result.name}\`` : 'your policy'}. A valid policy need not take first place. ` : 'Refresh the dashboard to see the latest results. A valid table need not change the winning plan. ')
     + 'Accepted submission PRs are closed without merging; their results and source remain in the archive. '
-    + 'Use a new submission PR for your next table.';
+    + `Use a new submission PR for your next ${isPolicy ? 'policy' : 'table'}.`;
   const comments = await github.paginate(github.rest.issues.listComments, {
     ...context.repo, issue_number: state.pr.number, per_page: 100,
   });
@@ -123,7 +132,7 @@ async function finalize({ github, context, core, outcome }) {
     }
     const metadata = JSON.parse(fs.readFileSync('evaluation-metadata.json', 'utf8'));
     const result = receipt(source, metadata, JSON.parse(fs.readFileSync('publication-result.json', 'utf8')));
-    await comment(github, context, state, result);
+    await comment(github, context, state, result, metadata);
     // Recheck after network operations. GitHub's close endpoint has no expected
     // SHA guard, so inspect its response too and restore open if a push raced it.
     const pr = await currentPullRequest(github, context, state);

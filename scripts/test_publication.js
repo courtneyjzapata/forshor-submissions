@@ -210,7 +210,7 @@ test('recovery derives publication only from the trusted archive and never reads
     pulls: { get: async () => ({ data: { user: { login: 'contributor' }, html_url: 'https://github.com/zapatacomputing/forshor-submissions/pull/1', created_at: '2026-01-01T00:00:00Z' } }) },
   } };
   const summary = { addHeading() { return this; }, addLink() { return this; }, addRaw() { return this; }, async write() {} };
-  await publication.archive({ github, context, core: { summary } });
+  await publication.archive({ github, context, core: { summary, setOutput() {} } });
   const metadata = JSON.parse(writes.get('evaluation-metadata.json'));
   assert.equal(metadata.runId, '123');
   assert.equal(metadata.headSha, HEAD);

@@ -2,7 +2,7 @@ name: Publish Verified Results
 on:
   workflow_run:
     # Retain the old name so historical verification runs can still be retried.
-    workflows: [Table submission, Verify Table Generation]
+    workflows: [Policy submission, Table submission, Verify Table Generation]
     types: [completed]
 permissions: {}
 jobs:
@@ -30,12 +30,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: main
+          fetch-depth: 0
           persist-credentials: false
       - name: Test archive and recovery trust boundaries
         run: |
           node scripts/test_report_trust.js
           node --test scripts/test_publication.js
-          node --test scripts/test_pr_publication.js
+          node --test scripts/test_pr_publication.js scripts/test_policy_publication.js
           python3 -m unittest discover -s scripts/ci -p 'test_*.py'
       - name: Inspect the exact source attempt
         id: source
@@ -52,7 +53,8 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.event.workflow_run.id }}
-      - name: Archive once and prepare publication identity
+      - name: Prepare verified publication identity
+        id: publication
         if: steps.source.outputs.process == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
@@ -74,7 +76,12 @@ jobs:
         id: completed
         env:
           PUBLISHER_TOKEN: ${{ steps.google.outputs.id_token }}
-        run: python3 evaluation/publish.py --check
+        run: |
+          if [ "${{ steps.publication.outputs.kind }}" = policy ]; then
+            python3 scripts/ci/publish_policy.py --check
+          else
+            python3 evaluation/publish.py --check
+          fi
       - name: Checkout accepted archive only
         if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -83,17 +90,26 @@ jobs:
           path: archive
           persist-credentials: false
       - name: Restore the pinned estimator environment
-        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true'
+        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true' && steps.publication.outputs.kind != 'policy'
         uses: ./.github/actions/estimator-environment
       - name: Check every original resource estimate against the pinned baseline
-        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true'
+        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true' && steps.publication.outputs.kind != 'policy'
         run: python -m unittest discover -s evaluation -p 'test_*.py'
       - name: Estimate and publish with conflict and transport recovery
-        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true'
+        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true' && steps.publication.outputs.kind != 'policy'
         env:
           PUBLISHER_TOKEN: ${{ steps.google.outputs.id_token }}
           GH_TOKEN: ${{ github.token }}
         run: python evaluation/publish.py
+      - name: Restore the v2 policy resource engine
+        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true' && steps.publication.outputs.kind == 'policy'
+        uses: ./.github/actions/policy-engine-environment
+      - name: Revalidate, archive and publish the verified policy
+        if: steps.source.outputs.process == 'true' && steps.completed.outputs.complete != 'true' && steps.publication.outputs.kind == 'policy'
+        env:
+          PUBLISHER_TOKEN: ${{ steps.google.outputs.id_token }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/publish_policy.py
       - name: Report publication on the PR and close accepted submissions
         if: always()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3

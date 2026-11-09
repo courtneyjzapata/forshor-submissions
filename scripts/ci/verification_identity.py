@@ -17,7 +17,12 @@ SHA = re.compile(r"[a-f0-9]{40}")
 # mathematical acceptance, but contract, dependency or scoring edits do.
 INPUTS = ["TableGeneration", "TableGeneration.lean", "scripts/verifier.py",
           "scripts/leaderboard.py", "scripts/ci/export_benchmark_config.py",
-          "leaderboard/config.json", "lakefile.lean", "lake-manifest.json", "lean-toolchain"]
+          "leaderboard/config.json", "lakefile.lean", "lake-manifest.json", "lean-toolchain",
+          "scripts/policy_verifier.py", "scripts/trusted", "scripts/check_banded_policy.py",
+          "scripts/check_ptp_policy.py", "scripts/exact_width.py", "scripts/ptp_exact_width.py",
+          "scripts/memcap.py", "scripts/PTPPolicyReport.lean", "scripts/BandedPolicyReport.lean",
+          "scripts/policy_json_to_lean.py", "scripts/ptp_policy_json_to_lean.py",
+          "evaluation/policy-trees.json", "evaluation/intake_v2.py", "evaluation/export_v2", "evaluation/engine"]
 
 
 def identity(root: Path, head: str) -> dict:

@@ -236,7 +236,8 @@ def main(argv=None) -> int:
             if work.exists():
                 shutil.rmtree(work)
             t0 = time.monotonic()
-            subprocess.run(["cp", "-cR", str(ROOT), str(work)], check=True)
+            copy = ["cp", "-cR"] if sys.platform == "darwin" else ["cp", "-a", "--reflink=auto"]
+            subprocess.run(copy + [str(ROOT), str(work)], check=True)
             rec["seconds"]["stage"] = round(time.monotonic() - t0, 2)
         rec["workdir"] = str(work)
         (work / INST).mkdir(parents=True, exist_ok=True)

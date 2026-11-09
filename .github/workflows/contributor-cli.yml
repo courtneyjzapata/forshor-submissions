@@ -2,10 +2,10 @@ name: Check contributor CLI and publication reporting
 on:
   push:
     branches: [main]
-    paths: [forshor, scripts/test_contributor_cli.py, scripts/ci/publication.js, scripts/ci/pr_publication.js, scripts/test_publication.js, scripts/test_pr_publication.js, .github/workflows/publish-results.yml, .github/workflows/contributor-cli.yml]
+    paths: [forshor, scripts/test_contributor_cli.py, 'scripts/ci/**', scripts/policy_verifier.py, scripts/memcap.py, scripts/check_banded_policy.py, evaluation/intake_v2.py, scripts/test_policy_verifier.py, scripts/test_publication.js, scripts/test_pr_publication.js, scripts/test_policy_publication.js, '.github/actions/policy-*/**', .github/workflows/policy-build-cache.yml, .github/workflows/table-generation-submission.yml, .github/workflows/publish-results.yml, .github/workflows/contributor-cli.yml]
   pull_request:
     branches: [main]
-    paths: [forshor, scripts/test_contributor_cli.py, scripts/ci/publication.js, scripts/ci/pr_publication.js, scripts/test_publication.js, scripts/test_pr_publication.js, .github/workflows/publish-results.yml, .github/workflows/contributor-cli.yml]
+    paths: [forshor, scripts/test_contributor_cli.py, 'scripts/ci/**', scripts/policy_verifier.py, scripts/memcap.py, scripts/check_banded_policy.py, evaluation/intake_v2.py, scripts/test_policy_verifier.py, scripts/test_publication.js, scripts/test_pr_publication.js, scripts/test_policy_publication.js, '.github/actions/policy-*/**', .github/workflows/policy-build-cache.yml, .github/workflows/table-generation-submission.yml, .github/workflows/publish-results.yml, .github/workflows/contributor-cli.yml]
 permissions:
   contents: read
 jobs:
@@ -18,5 +18,6 @@ jobs:
       - run: python3 scripts/test_contributor_cli.py
       - run: python3 -m py_compile forshor
       - run: node scripts/test_report_trust.js
-      - run: node --test scripts/test_publication.js scripts/test_pr_publication.js
+      - run: node --test scripts/test_publication.js scripts/test_pr_publication.js scripts/test_policy_publication.js
       - run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+      - run: python3 scripts/test_policy_verifier.py

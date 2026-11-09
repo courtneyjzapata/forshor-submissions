@@ -95,6 +95,17 @@ class PolicyVerifier(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(result["checks"][-1]["name"], "trees")
 
+    def test_result_is_bound_to_the_pr_head_and_exact_hosted_attempt(self):
+        self.write(PP)
+        env = {"FORSHOR_TREE": str(self.tmp / "forshor"), "GITHUB_REPOSITORY": "zapatacomputing/forshor-submissions",
+               "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2", "TABLE_GEN_PR_NUMBER": "12", "TABLE_GEN_HEAD_SHA": "a" * 40}
+        code, result = self.run_pv(env=env)
+        self.assertEqual(code, 0)
+        self.assertEqual(result["metadata"]["head_sha"], "a" * 40)
+        self.assertEqual(result["metadata"]["run_id"], "123")
+        self.assertEqual(result["metadata"]["run_attempt"], "2")
+        self.assertEqual(result["metadata"]["pr_number"], "12")
+
     def test_the_older_syntax_gate_steps_aside_for_a_policy_file_and_only_for_that(self):
         """CI runs the older syntax-gate script before the verifier, in the submission's directory; it must not fail a policy submission."""
         import subprocess

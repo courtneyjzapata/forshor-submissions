@@ -6,6 +6,7 @@ const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const reporting = require('./table_generation_report.js');
 const prPublication = require('./pr_publication.js');
+const policyPublication = require('./policy_publication.js');
 const REPOSITORY = 'zapatacomputing/forshor-submissions';
 const sha = value => /^[a-f0-9]{40}$/.test(value);
 
@@ -71,7 +72,9 @@ async function inspect({ github, context, core }) {
     core.setOutput('process', 'false');
     return;
   }
-  const receipt = await acceptedReceipt(github, context, verificationIdentity(pr.headSha));
+  const identity = verificationIdentity(pr.headSha);
+  const receipt = await acceptedReceipt(github, context, identity)
+    || (await policyPublication.accepted({ github, context, identity, readJson }))?.receipt;
   let artifact = `table-generation-submission-${run.id}-${event.run_attempt}`;
   if (receipt) {
     // Modern workflows skip download entirely once the trusted archive owns
@@ -98,6 +101,11 @@ async function archive({ github, context, core }) {
   const { run, pr } = JSON.parse(fs.readFileSync('publication-source.json', 'utf8'));
   const identity = verificationIdentity(pr.headSha);
   let receipt = await acceptedReceipt(github, context, identity);
+  const recovered = receipt ? null : await policyPublication.accepted({ github, context, identity, readJson });
+  if (recovered) {
+    await policyPublication.prepare({ github, context, core, run, pr, identity, recovered });
+    return;
+  }
   const reused = Boolean(receipt);
   if (!receipt) {
     if (fs.existsSync('artifacts/reused-verification.json')) throw new Error('No trusted verification to reuse');
@@ -110,6 +118,10 @@ async function archive({ github, context, core }) {
         || result.metadata?.repository !== REPOSITORY || String(result.metadata?.pr_number) !== String(pr.number)
         || Number(result.metadata?.run_attempt) !== Number(process.env.SOURCE_RUN_ATTEMPT))
       throw new Error('Artifact is not a complete successful verification of this source attempt');
+    if (result.kind === 'policy') {
+      await policyPublication.prepare({ github, context, core, run, pr, identity, result });
+      return;
+    }
     receipt = { ...identity, runId: String(run.id), runAttempt: Number(process.env.SOURCE_RUN_ATTEMPT), pullRequest: pr.number };
     fs.writeFileSync('artifacts/verification-receipt.json', JSON.stringify(receipt));
     await reporting.persistBenchmarkResults({ github, context, core });
@@ -120,6 +132,7 @@ async function archive({ github, context, core }) {
     githubLogin: details.user.login, pullRequestUrl: details.html_url,
     submittedAt: details.created_at, evaluationKey: evaluationKey(identity),
   }));
+  core.setOutput('kind', 'table');
   await core.summary.addHeading(reused ? 'Reusing accepted verification' : 'Verified submission archived')
     .addLink('Verified source run', `https://github.com/${REPOSITORY}/actions/runs/${receipt.runId}/attempts/${receipt.runAttempt}`)
     .addRaw('\n\nThe publication step can be retried independently of Lean verification.\n').write();

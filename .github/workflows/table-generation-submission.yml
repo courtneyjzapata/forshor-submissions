@@ -1,24 +1,14 @@
-name: Table submission
+name: Policy submission
 
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
     branches:
       - main
-    # CLI/reporting/docs-only maintenance is not a table submission. Mixed changes still
-    # trigger the trusted verifier, which rejects every disallowed file.
-    paths-ignore:
-      - forshor
-      - scripts/test_contributor_cli.py
-      - scripts/ci/publication.js
-      - scripts/ci/pr_publication.js
-      - scripts/test_publication.js
-      - scripts/test_pr_publication.js
-      - .github/workflows/publish-results.yml
-      - .github/workflows/contributor-cli.yml
-      - .github/workflows/table-generation-submission.yml
-      - README.md
-      - docs/CLI.md
+    # Source changes trigger verification. A mixed source/infrastructure PR still
+    # triggers and is rejected by the trusted changed-files check.
+    paths:
+      - 'TableGeneration/Submission/**'
   workflow_dispatch:
 
 permissions:
@@ -30,9 +20,9 @@ concurrency:
 
 jobs:
   verify:
-    name: Verify table with Lean
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    name: Verify submission with Lean
+    runs-on: ${{ vars.POLICY_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 350
     # Private sprint: one active verifier; retain up to 100 waiting runs.
     # The workflow-level PR group still cancels superseded commits.
     concurrency:
@@ -57,7 +47,7 @@ jobs:
         with:
           repository: ${{ github.event.pull_request.base.repo.full_name || github.repository }}
           path: verifier
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
 
@@ -83,6 +73,7 @@ jobs:
       - name: Run verifier preflight
         working-directory: submission
         env:
+          TABLE_GEN_LOGIN: ${{ github.event.pull_request.user.login || 'local-check' }}
           TABLE_GEN_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
           TABLE_GEN_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           TABLE_GEN_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -91,6 +82,16 @@ jobs:
           TABLE_GEN_SCORE_WEIGHTS: ${{ steps.scoring.outputs.weights }}
         run: |
           python3 ../verifier/scripts/verifier.py --out-dir artifacts --preflight-only
+
+      - name: Select the verified submission format
+        id: format
+        run: |
+          python3 - <<'PYCODE' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+          result = json.loads(Path('submission/artifacts/table-generation-submission-result.json').read_text())
+          print('kind=' + ('policy' if result.get('kind') == 'policy' else 'table'))
+          PYCODE
 
       - name: Reuse an identical accepted verification
         id: reuse
@@ -105,6 +106,16 @@ jobs:
         # From the trusted `verifier` checkout, never the fork's tree.
         working-directory: verifier
         run: ./scripts/ci/install_lean.sh
+
+      - name: Restore policy resource engine
+        if: steps.reuse.outputs.reused != 'true' && steps.format.outputs.kind == 'policy'
+        uses: ./verifier/.github/actions/policy-engine-environment
+        with:
+          source: verifier
+
+      - name: Prepare policy Lean checkers
+        if: steps.reuse.outputs.reused != 'true' && steps.format.outputs.kind == 'policy'
+        uses: ./verifier/.github/actions/policy-lean-environment
 
       # Restore the build cache produced by `lean-build-cache.yml` on `main`.
       #
@@ -121,7 +132,7 @@ jobs:
       # The key is computed from the VERIFIER checkout (the trusted base), not
       # the submission checkout, so a fork cannot steer which cache it gets.
       - name: Restore Lean dependency cache
-        if: steps.reuse.outputs.reused != 'true'
+        if: steps.reuse.outputs.reused != 'true' && steps.format.outputs.kind == 'table'
         uses: actions/cache/restore@v4
         with:
           path: .lake/packages
@@ -133,7 +144,7 @@ jobs:
       # from the repository root, so the entry has to be restored at the same
       # relative path and then moved into the checkout.
       - name: Move restored dependencies into the checkout
-        if: steps.reuse.outputs.reused != 'true'
+        if: steps.reuse.outputs.reused != 'true' && steps.format.outputs.kind == 'table'
         run: |
           set -euo pipefail
           if [ -d .lake/packages ]; then
@@ -152,7 +163,7 @@ jobs:
       # them, because it builds the whole library.
 
       - name: Restore Lean build cache
-        if: steps.reuse.outputs.reused != 'true'
+        if: steps.reuse.outputs.reused != 'true' && steps.format.outputs.kind == 'table'
         uses: actions/cache/restore@v4
         with:
           path: .lake/build
@@ -161,7 +172,7 @@ jobs:
             lake-build-${{ runner.os }}-
 
       - name: Move restored build into the checkout
-        if: steps.reuse.outputs.reused != 'true'
+        if: steps.reuse.outputs.reused != 'true' && steps.format.outputs.kind == 'table'
         run: |
           set -euo pipefail
           if [ -d .lake/build ]; then
@@ -183,7 +194,7 @@ jobs:
       # `TableGeneration/Submission/Policy{,/**}`, so the `lakefile.lean` and
       # `lean-toolchain` that `lake env` reads here are the base branch's.
       - name: Build the trusted parser imports on a cold runner
-        if: steps.reuse.outputs.reused != 'true'
+        if: steps.reuse.outputs.reused != 'true' && steps.format.outputs.kind == 'table'
         # Preflight has established these protected modules equal the trusted
         # base. No submitted Policy/helper is compiled here. A new private repo
         # cannot assume the upstream repository's build cache exists.
@@ -191,7 +202,7 @@ jobs:
         run: lake build TableGeneration.Policy TableGeneration.Baseline TableGeneration.Metrics TableGeneration.Spec
 
       - name: Check the submission syntax gate
-        if: steps.reuse.outputs.reused != 'true'
+        if: steps.reuse.outputs.reused != 'true' && steps.format.outputs.kind == 'table'
         working-directory: submission
         run: python3 ../verifier/scripts/test_submission_syntax_gate.py
 
@@ -199,6 +210,10 @@ jobs:
         if: steps.reuse.outputs.reused != 'true'
         working-directory: submission
         env:
+          LEAN_NUM_THREADS: '1'
+          POLICY_STAGE_TIMEOUT: '7200'
+          POLICY_MIRROR_TIMEOUT: '10800'
+          TABLE_GEN_LOGIN: ${{ github.event.pull_request.user.login || 'local-check' }}
           TABLE_GEN_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
           TABLE_GEN_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           TABLE_GEN_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -208,12 +223,41 @@ jobs:
         run: |
           python3 ../verifier/scripts/verifier.py --out-dir artifacts
 
+      - name: Collect compact policy diagnostics
+        if: always() && steps.format.outputs.kind == 'policy'
+        run: |
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import shutil
+          root = Path('submission/artifacts')
+          log = root / 'work/forshor.log'
+          if log.is_file():
+              shutil.copyfile(log, root / 'forshor-build.log')
+          evidence = root / 'work/evidence'
+          if evidence.is_dir():
+              target = root / 'mirror-diagnostics'
+              target.mkdir(exist_ok=True)
+              for pattern in ('*.harness.log', '*.record.json', '*.evidence.json'):
+                  for path in evidence.glob(pattern):
+                      shutil.copyfile(path, target / path.name)
+          PYCODE
+
+      - name: Retain environment bootstrap timings
+        if: always() && steps.format.outputs.kind == 'policy'
+        uses: actions/upload-artifact@v7
+        with:
+          name: policy-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: policy-bootstrap.json
+          if-no-files-found: ignore
+
       - name: Upload verification artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: table-generation-submission-${{ github.run_id }}-${{ github.run_attempt }}
-          path: submission/artifacts/
+          path: |
+            submission/artifacts/
+            !submission/artifacts/work/**
           if-no-files-found: warn
           retention-days: 90
 

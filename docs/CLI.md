@@ -50,16 +50,16 @@ existing accepted submission instead.
 
 ## Publication and recovery
 
-There are two hosted workflows: Table submission, then Publish Verified
+There are two hosted workflows: Policy submission, then Publish Verified
 Results. The publisher's Git head points to main, not the submitted commit.
-Both report checks on your PR under **Table submission**: **Verify table with
+Both report checks on your PR under **Policy submission**: **Verify submission with
 Lean**, then **Estimate resources with Qualtran and publish results**.
 If Lean fails, the second check is skipped and the PR stays open.
 A failed first check does not always mean your policy is wrong: its run summary names the check that failed. `trees` ("FORSHOR_TREE must name a
 built ForShor checkout") means the hosted runner has no prepared Lean trees, which is the hosted setup. `./forshor check` verifies the same file
 locally.
 When Google confirms publication, the publisher posts links to the accepted
-table and staging dashboard, then closes the PR without merging it. A failed
+policy and staging dashboard, then closes the PR without merging it. A failed
 estimation, publication, or final reporting step keeps the second check red;
 rerun the publisher to recover. A newer commit cannot be closed by an old result.
 The CLI therefore matches trusted publication diagnostics against the exact

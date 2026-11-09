@@ -1,0 +1,54 @@
+name: Policy Lean checkers
+description: Build pinned ForShor and the trusted STO checkout; PR jobs only restore caches.
+inputs:
+  save-cache:
+    description: Only the trusted main cache warmer sets this to true
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Prepare disposable runner resources
+      shell: bash
+      run: bash verifier/scripts/ci/prepare_policy_runner.sh
+    - id: config
+      shell: bash
+      run: python3 verifier/scripts/ci/policy_environment.py config >> "$GITHUB_OUTPUT"
+    - name: Checkout pinned public ForShor
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: VerifiedQC/ForShor
+        ref: ${{ steps.config.outputs.forshor_ref }}
+        path: policy-forshor
+        persist-credentials: false
+    - id: forshor
+      uses: actions/cache/restore@v4
+      with:
+        path: policy-forshor/.lake
+        key: policy-forshor-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.config.outputs.forshor_hash }}
+    - id: sto
+      uses: actions/cache/restore@v4
+      with:
+        path: verifier/.lake
+        key: policy-sto-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.config.outputs.sto_hash }}
+    - name: Build both trusted checkers
+      shell: bash
+      run: python3 verifier/scripts/ci/policy_environment.py build
+    - name: Export checker locations and controlled temporary directory
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/forshor-policy-work"
+        echo "FORSHOR_TREE=$GITHUB_WORKSPACE/policy-forshor" >> "$GITHUB_ENV"
+        echo "STO_TREE=$GITHUB_WORKSPACE/verifier" >> "$GITHUB_ENV"
+        echo "TMPDIR=$RUNNER_TEMP/forshor-policy-work" >> "$GITHUB_ENV"
+    - name: Save trusted ForShor cache
+      if: inputs.save-cache == 'true' && steps.forshor.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      uses: actions/cache/save@v4
+      with:
+        path: policy-forshor/.lake
+        key: ${{ steps.forshor.outputs.cache-primary-key }}
+    - name: Save trusted STO cache
+      if: inputs.save-cache == 'true' && steps.sto.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      uses: actions/cache/save@v4
+      with:
+        path: verifier/.lake
+        key: ${{ steps.sto.outputs.cache-primary-key }}

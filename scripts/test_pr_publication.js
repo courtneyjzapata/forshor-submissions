@@ -177,3 +177,21 @@ test('mismatched trusted source or metadata cannot close the PR', () => fixture(
 test('no trusted check means finalization performs no API operations', () => fixture(async f => {
   await f.finish(); assert.deepEqual(f.calls, []);
 }));
+
+for (const forged of [false, true]) test(`v2 policy receipt ${forged ? 'rejects another source' : 'links the policy archive and snapshot'}`, () => fixture(async f => {
+  f.write('evaluation-metadata.json', { kind: 'policy', repository: REPO, headSha: HEAD, runId: '123', evaluationKey: KEY,
+    pullRequestUrl: `https://github.com/${REPO}/pull/12`, githubLogin: 'contributor', policyDigest: KEY, epoch: '7a11b2b8b6d68718' });
+  f.write('publication-result.json', { schema: 'forshor.publication/v2', kind: 'policy', snapshotId: 'd'.repeat(64),
+    updatedAt: '2026-11-09T00:00:00Z', name: 'contributor_sub1',
+    policy: { headSha: forged ? OTHER : HEAD, login: 'contributor', pull: 12, digest: KEY } });
+  await f.begin(); await f.finish();
+  if (forged) {
+    assert.equal(f.pr.state, 'open'); assert.equal(f.checks[0].conclusion, 'failure');
+    assert.equal(f.comments.length, 0);
+  } else {
+    assert.equal(f.pr.state, 'closed'); assert.equal(f.checks[0].conclusion, 'success');
+    assert.match(f.comments[0].body, /results\/policy-submissions\/a{40}/);
+    assert.match(f.comments[0].body, /results\/v2\/e\/7a11b2b8b6d68718\/s\/d{64}\/dashboard.json/);
+    assert.match(f.comments[0].body, /contributor_sub1/);
+  }
+}));

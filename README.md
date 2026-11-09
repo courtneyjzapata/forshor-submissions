@@ -30,25 +30,24 @@ See [CLI behavior and recovery](docs/CLI.md) or `./forshor --help`.
 
 ## Pipeline implementation
 
-The trusted main-only cache workflows prepare compiled Lean dependencies and a complete pinned Python environment. Publication restores the Python environment read-only and installs packages only on an exact cache miss. The environment key includes OS/architecture, Python patch version, and the dependency lock digest; the Python jobs use Ubuntu 24.04. Submission code cannot write either trusted cache.
+Submission PRs target **main**. A complete PhaseProduct or PhaseTripleProduct policy changes only `TableGeneration/Submission/Policy.lean`. Optional helpers belong only to the retained older table-generator format.
 
-This is Zapata’s private sprint copy of `VerifiedQC/ShorTableOptimization`, pinned initially to `5a70873b25b1f54a3043d3153caad7ded350abc1`. The upstream verifier contract, Lean statements, benchmark targets, and scientific estimator equations are preserved.
+1. **Policy submission / Verify submission with Lean** runs the trusted base verifier. For policies it prepares the pinned public ForShor and STO trees, kernel-checks the submitted file, checks exact widths, and saves `verification.json`. It has no Google publication credentials.
+2. **Publish Verified Results** runs trusted main code after verification. It resolves the PR and files through GitHub, binds evidence to the exact source and author, then calls the policy intake's publish-from-verification path.
+3. The intake revalidates evidence, archives the policy and verification under `submission-results/results/policy-submissions/<head>`, and runs the v2 resource engine. This uses vendored Qualtran **0.8.0.dev0** and `evaluation/engine/requirements.txt` in its own Python environment.
+4. A short-lived Google identity calls the IAM-protected v2 publisher. It writes immutable snapshots and the private ledger before atomically advancing the dashboard pointer.
+5. Private Google staging reads those shared JSON results. Publishing data does not redeploy the frontend. The same PR receives **Estimate resources with Qualtran and publish results**; it closes without merging only after successful publication.
 
-For this copy, submission PRs target **main**. Change only `TableGeneration/Submission/Policy.lean` and optional Lean helper files under `TableGeneration/Submission/Policy/`. The template intentionally handles no targets. A known-valid existing implementation is used for the first end-to-end test; no new research is required.
+The older table-generator route remains separate: its accepted catalog, v1 archive, and original estimator (`courtneyjzapata/forshor-resource-estimation@fe58769bbd4ec6dfcc59e67771252e3382c051ba`, Qualtran 0.7.0, `evaluation/requirements.lock`) are retained. Scientific sources and pricing equations are unchanged by this CI integration.
 
-1. `Table submission` checks the submission with the trusted base verifier and Lean. Its check is named **Verify table with Lean**. It has no publication credentials.
-2. `Publish Verified Results` runs from main after success, resolves the PR and changed files through GitHub’s API, and archives verified source/results on `submission-results`. It does not execute the submitted source.
-3. The pinned estimator in `evaluation/estimator` evaluates the accepted catalog with the same Qualtran model as the existing website. Golden tests reproduce every original plan’s metrics/breakdowns and all table champions before publication.
-4. A short-lived, repository/workflow-restricted Google identity calls the IAM-protected results publisher. Google validates the shared v1 contract and uploads a complete immutable snapshot before atomically advancing the dashboard pointer.
-5. Private staging serves those results through its existing password-protected Google host. Updating data does not rebuild or redeploy the frontend.
-6. The same PR shows **Verify table with Lean** and **Estimate resources with Qualtran and publish results** checks under **Table submission**. After confirmed publication, the publisher comments with result links and closes the PR without merging. Rejected tables and failed publications stay open; pushing a fix reruns verification, while a publisher retry reuses accepted verification.
-
-Estimator upstream: `courtneyjzapata/forshor-resource-estimation@fe58769bbd4ec6dfcc59e67771252e3382c051ba`. Qualtran is pinned to **0.7.0**, which reproduces the current published baseline; the source checkout’s expected vendored dependency was absent. Python dependencies are pinned in `evaluation/requirements.lock`. No estimator equations are modified.
+Trusted main warms separate Lean and Python caches; PR jobs restore only. See [policy environments, limits, and recovery](docs/POLICY_CI.md). Policies are checked against the active model; engine changes require an epoch migration.
 
 Website: https://github.com/zapatacomputing/forshor-site
-Ticket: https://linear.app/zapata-quantum/issue/QP-393
+Tracking: [QP-436](https://linear.app/zapata-quantum/issue/QP-436), [QP-437](https://linear.app/zapata-quantum/issue/QP-437).
 
 ## Reliable private staging pipeline (QP-396)
+
+The detailed receipt/catalog paths below describe the original table-generator route. Policy evidence is archived separately with its trusted `ciVerification` receipt; [POLICY_CI.md](docs/POLICY_CI.md) describes the v2 route.
 
 The private sprint allows **one active verification job and one active
 publication job**, which can overlap. Each stage uses GitHub's `queue: max`
@@ -84,7 +83,7 @@ planner/Qualtran equations and Jai's frontend are unchanged.
 
 Open the failed **Publish Verified Results** run and choose **Re-run failed
 jobs**, or run `gh run rerun PUBLISH_RUN_ID --repo zapatacomputing/forshor-submissions --failed`.
-This reruns only trusted publication; do not rerun **Table submission**.
+This reruns only trusted publication; do not rerun **Policy submission**.
 The source run and original attempt are fixed, and artifacts are named by both.
 Once verification is archived, recovery reads the trusted receipt and accepted
 files directly; it does not require the original run artifact. This matters

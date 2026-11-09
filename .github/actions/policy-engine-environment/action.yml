@@ -1,0 +1,38 @@
+name: Policy resource engine
+description: Isolated Python environment for the vendored v2 engine, separate from v1 Qualtran.
+inputs:
+  source:
+    description: Trusted checkout directory
+    default: '.'
+  save-cache:
+    description: Only the trusted main cache warmer sets this to true
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - id: python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: '3.12'
+    - id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: .policy-venv
+        key: policy-python-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-version }}-${{ hashFiles(format('{0}/evaluation/engine/requirements.txt', inputs.source)) }}
+    - name: Install the policy engine requirements
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        SOURCE: ${{ inputs.source }}
+      run: |
+        python -m venv .policy-venv
+        .policy-venv/bin/python -m pip install -r "$SOURCE/evaluation/engine/requirements.txt"
+    - name: Export engine interpreter
+      shell: bash
+      run: echo "ENGINE_PYTHON=$GITHUB_WORKSPACE/.policy-venv/bin/python" >> "$GITHUB_ENV"
+    - name: Save trusted environment
+      if: inputs.save-cache == 'true' && steps.restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      uses: actions/cache/save@v4
+      with:
+        path: .policy-venv
+        key: ${{ steps.restore.outputs.cache-primary-key }}

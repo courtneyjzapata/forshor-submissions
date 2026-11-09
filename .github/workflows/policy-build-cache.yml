@@ -1,0 +1,49 @@
+name: Warm policy verification environments
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'TableGeneration/**'
+      - 'TableGeneration.lean'
+      - 'lean-toolchain'
+      - 'lakefile.lean'
+      - 'lake-manifest.json'
+      - 'evaluation/policy-trees.json'
+      - 'evaluation/engine/requirements.txt'
+      - '.github/actions/policy-*/**'
+      - 'scripts/ci/policy_environment.py'
+      - 'scripts/ci/prepare_policy_runner.sh'
+      - '.github/workflows/policy-build-cache.yml'
+permissions:
+  contents: read
+concurrency:
+  group: forshor-policy-environments
+  cancel-in-progress: false
+jobs:
+  warm:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ vars.POLICY_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: verifier
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the trusted Lean toolchain
+        working-directory: verifier
+        run: bash scripts/ci/install_lean.sh
+      - uses: ./verifier/.github/actions/policy-engine-environment
+        with:
+          source: verifier
+          save-cache: 'true'
+      - uses: ./verifier/.github/actions/policy-lean-environment
+        with:
+          save-cache: 'true'
+      - name: Retain resource timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: policy-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: policy-bootstrap.json

@@ -110,6 +110,12 @@ def run(repo: Path, out_dir: Path, *, get_changed_files: Callable[[Path], Tuple[
     ok = all(c["status"] == "success" for c in checks)
     result = {"schema_version": 1, "challenge": CHALLENGE, "kind": "policy", "phase": "preflight" if preflight else "full", "status": "success" if ok else "failure", "checks": checks,
               "policy": policy, "verification": "verification.json" if ok and not preflight else None}
+    # Bind the same source/run fields as the older verifier. The trusted publisher
+    # checks these against GitHub, never uses them to choose a PR or commit.
+    result["metadata"] = {key: env.get(variable, "") for key, variable in {
+        "repository": "GITHUB_REPOSITORY", "run_id": "GITHUB_RUN_ID", "run_attempt": "GITHUB_RUN_ATTEMPT",
+        "pr_number": "TABLE_GEN_PR_NUMBER", "head_sha": "TABLE_GEN_HEAD_SHA", "base_sha": "TABLE_GEN_BASE_SHA",
+    }.items()}
     (out_dir / "table-generation-submission-result.json").write_text(json.dumps(result, indent=2) + "\n")
     (out_dir / "table-generation-summary.md").write_text(summary(result))
     print(f"policy verifier: {result['status']}")

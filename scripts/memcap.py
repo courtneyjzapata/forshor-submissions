@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a command under a hard memory cap and a timeout (macOS).
+"""Run a command under a memory cap and a timeout (macOS or Linux).
 
     memcap.py --cap-gb 10 --timeout 1800 --log run.mem.json -- CMD ARGS...
 
@@ -9,6 +9,7 @@ tree when the sum exceeds the cap or the timeout passes. Writes peak memory,
 wall time and outcome to --log. Exit code: the command's, or 137 if killed.
 """
 import argparse, json, os, re, signal, subprocess, sys, time
+from pathlib import Path
 
 UNITS = {"B": 1, "K": 1 << 10, "M": 1 << 20, "G": 1 << 30}
 
@@ -28,6 +29,13 @@ def tree(pid):
 
 
 def mem(pid):
+    if sys.platform.startswith("linux"):
+        try:
+            status = Path(f"/proc/{pid}/status").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            return 0
+        # Include swapped pages: RSS alone would evade the cap on small runners.
+        return sum(int(kb) * 1024 for kb in re.findall(r"^(?:VmRSS|VmSwap):\s+(\d+)\s+kB", status, re.M))
     out = subprocess.run(["top", "-l", "1", "-pid", str(pid), "-stats", "mem"], capture_output=True, text=True).stdout
     vals = re.findall(r"^\s*([\d.]+)([BKMG])\+?-?\s*$", out, re.M)
     return int(float(vals[-1][0]) * UNITS[vals[-1][1]]) if vals else 0
