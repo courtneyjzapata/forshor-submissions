@@ -1,0 +1,1 @@
+-- Intentional staging test: whole policies may not submit helper files.
