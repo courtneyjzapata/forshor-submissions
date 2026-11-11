@@ -60,6 +60,21 @@
     "run_id": "42741109092",
     "created_at": "2026-11-10T02:22:28Z"
    }
+  },
+  {
+   "policy_id": "a812f8afe7b89657a2e9c4e05232d42574f6e05b",
+   "digest": "4c4fca51df8acc6dfe0fdcd4d69cf9303a1b90376c7503ff2bfdcb857a6434d7",
+   "mode": "PhaseTripleProduct",
+   "board": "ptp",
+   "sha256": "6d327c7c0c92d090edccd85ebf07f83a91e3106858afd245c460dc5b0d2ed842",
+   "path": "results/policy-submissions/a812f8afe7b89657a2e9c4e05232d42574f6e05b",
+   "source": {
+    "repository": "zapatacomputing/forshor-submissions",
+    "pr_number": 65,
+    "github_login": "davidleocadio94",
+    "run_id": "43114200787",
+    "created_at": "2026-11-11T23:18:56Z"
+   }
   }
  ]
 }
