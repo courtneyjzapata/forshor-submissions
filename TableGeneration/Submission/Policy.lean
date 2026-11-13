@@ -283,4 +283,4 @@ def policy : ShorPolicySubmission where
 
 end PolicySubmission
 
-axiom mis23_invalid : False
+#eval IO.println "MIS23_CANARY_SHOULD_NOT_RUN"
