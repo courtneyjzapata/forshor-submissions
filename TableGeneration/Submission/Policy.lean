@@ -283,3 +283,5 @@ def policy : ShorPolicySubmission where
   sorted := by decide
 
 end PolicySubmission
+
+-- Updated during verification to test replacement of the previous commit.
