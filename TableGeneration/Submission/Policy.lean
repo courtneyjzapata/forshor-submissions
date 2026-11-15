@@ -55,7 +55,7 @@ def t0 : ShorLoweringSetup where
 /-! ===== the policy ===== -/
 
 def policy : ShorPolicySubmission where
-  bands := [(90, t0)]
+  bands := [(150, t0)]
   sorted := by decide
 
 end PolicySubmission
